@@ -38,6 +38,17 @@ def now():
 
        return int(time.time())
 
+def hexdump(buf, chunklen = 16):
+        l = chunklen
+        while len(buf) > 0:
+            b = buf[:l]
+            buf = buf[l:]
+            s = 3 * l - 1
+            #b = b.ljust(l, '\000')
+            fmt = "%-" + str(s) + "s%s%s"
+            print fmt % (' '.join("%02x" % ord(c) for c in b),
+                ' ', ''.join(['.', c][c.isalnum()] for c in b))
+
 class PersistentQueue(Queue.Queue):
     """
     This class has the same interface as threading.Queue except that
@@ -83,12 +94,15 @@ class APNSAgent(threading.Thread):
     def run(self):
         while True:
             ident, devtok, payload = self.queue.get()
-            #msg = struct.pack('c >I>I >H32c >Hs', 1, ident, now(), 32, bintok,
-            #    len(payload), payload)
             bintok = base64.standard_b64decode(devtok)
             asciitok = ''.join("%02x" % ord(c) for c in bintok)
             logging.debug("Sending notification #%d to %s (%s): %s" %
                 (ident, devtok, asciitok, payload))
+            fmt = '> B II' + 'H' + str(len(bintok)) + 's' + \
+                'H' + str(len(payload)) + 's'
+            binmsg = struct.pack(fmt, 1, ident, now(), len(bintok), bintok,
+                len(payload), payload)
+            hexdump(binmsg)
             time.sleep(random.randint(3, 9))
 
 
