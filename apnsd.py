@@ -119,7 +119,7 @@ if len(logfile) == 0:
             format='%(asctime)s %(message)s',
             datefmt='%Y/%m/%d %H:%M:%S')
 else:
-        logging.basicConfig(filename=logile, level=logging.DEBUG,
+        logging.basicConfig(filename=logfile, level=logging.DEBUG,
             format='%(asctime)s %(message)s',
             datefmt='%Y/%m/%d %H:%M:%S')
 
@@ -190,31 +190,45 @@ while True:
     if msg[0:5].lower().find("send ") == -1:
         logging.warning("Invalid input: %s" % msg)
         continue
-    msg = msg[5:]
-    l = re.split(whtsp, msg, 1)
-    ntok = int(l[0])
-    l = re.split(whtsp, l[1], ntok)
-    devtoks = l[0:ntok]
-    msg = l[ntok]
+    cmdargs = msg[5:]
+    try:
+        l = re.split(whtsp, cmdargs, 1)
+        ntok = int(l[0])
+        l = re.split(whtsp, l[1], ntok)
+        devtoks = l[0:ntok]
+        payload = l[ntok]
+    except IndexError as e:
+        logging.warning("Invalid input: %s" % msg)
+        continue
     #
     # Check device tokens.
     goodtoks = []
-    for devtok64 in devtoks:
-        try:
-            devtok = base64.standard_b64decode(devtok64)
-        except TypeError:
-            logging.warning("Wrong base64 encoding for device token: %s" %
-                devtok64)
-            continue
+    for dt in devtoks:
+        devtok = ''
+        if len(dt) == 64:
+            # Hexadecimal device token, convert it to base64.
+            for i in range(0, 64, 2):
+                c = dt[i:i+2]
+                devtok = devtok + struct.pack('B', int(c, 16))
+        else:
+            # Maybe base64?
+            try:
+                devtok = base64.standard_b64decode(dt)
+            except TypeError:
+                logging.warning("Wrong base64 encoding for device " \
+                    "token: %s" % dt)
+                continue
         if len(devtok) != 32:
             logging.warning("Wrong device token length (%d != 32): %s" %
-                (len(devtok), devtok64))
+                (len(devtok), dt))
             continue
-        goodtoks.append(devtok64)
+        # Store the token in base64 in the queue, text is better to debug.
+        logging.debug("new devtok %s" % base64.standard_b64encode(devtok))
+        goodtoks.append(base64.standard_b64encode(devtok))
     devtoks = goodtoks
     #
     # Enqueue notifications.
     sqlcur.execute('UPDATE ident SET cur=?', (curid + ntok, ))
     for devtok in devtoks:
-        apnsq.put((curid, devtok, msg))
+        apnsq.put((curid, devtok, payload))
         curid = curid + 1
