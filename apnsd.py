@@ -117,13 +117,13 @@ if len(l) == 0:
     raise Exception("Cannot open '%s'" % CONFIGFILE)
 
 try:
-    notifications_gateway = cp.get('apnsd', 'notifications_gateway')
-    feedback_gateway = cp.get('apnsd', 'feedback_gateway')
-    notifications_zmq_bind = cp.get('apnsd', 'notifications_zmq_bind')
-    feedback_zmq_bind = cp.get('apnsd', 'feedback_zmq_bind')
-    concurrency = int(cp.get('apnsd', 'concurrency'))
+    zmq_bind = cp.get('apnsd', 'zmq_bind')
     sqlitedb = cp.get('apnsd', 'sqlitedb')
     logfile = cp.get('apnsd', 'logfile')
+    apns_gateway = cp.get('apns', 'gateway')
+    apns_concurrency = int(cp.get('apns', 'concurrency'))
+    feedback_gateway = cp.get('feedback', 'gateway')
+    feedback_frequency = int(cp.get('feedback', 'frequency'))
 except ConfigParser.Error as e:
     logging.error("%s: %s" % (CONFIGFILE, e))
     sys.exit(1)
@@ -141,21 +141,11 @@ else:
 # Creation ZMQ sockets early so we don't waste other resource if it fails.
 #
 logging.info("Notifications ZMQ PULL socket bound on tcp://%s" %
-    notifications_zmq_bind)
+    zmq_bind)
 try:
     zmqctx_r = zmq.Context()
     zmqrcv = zmqctx_r.socket(zmq.PULL)
-    zmqrcv.bind("tcp://%s" % notifications_zmq_bind)
-except zmq.core.error.ZMQError as e:
-    print e
-    sys.exit(2)
-
-logging.info("Feedback ZMQ PUSH socket bound on tcp://%s" %
-    feedback_zmq_bind)
-try:
-    zmqctx_s = zmq.Context()
-    zmqsnd = zmqctx_s.socket(zmq.PUSH)
-    zmqsnd.bind("tcp://%s" % feedback_zmq_bind)
+    zmqrcv.bind("tcp://%s" % zmq_bind)
 except zmq.core.error.ZMQError as e:
     print e
     sys.exit(2)
@@ -188,7 +178,7 @@ logging.info("Notifications current identifier is %d" % curid)
 #
 # Start APNS threads.
 #
-for i in range(concurrency):
+for i in range(apns_concurrency):
     t = APNSAgent(apnsq)
     t.start()
 
@@ -220,7 +210,7 @@ while True:
     for dt in devtoks:
         devtok = ''
         if len(dt) == 64:
-            # Hexadecimal device token, convert it to base64.
+            # Hexadecimal device token.
             for i in range(0, 64, 2):
                 c = dt[i:i+2]
                 devtok = devtok + struct.pack('B', int(c, 16))
