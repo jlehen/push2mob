@@ -290,11 +290,14 @@ logging.info("%d feedbacks retrieved from persistent storage" %
     feedbackq.qsize())
 
 #
-# Start APNS threads.
+# Start APNS threads and Feedback one.
 #
 for i in range(apns_concurrency):
-    t = APNSAgent(apnsq)
+    t = APNSAgent(apnsq, apns_gateway)
     t.start()
+
+t = FeedbackAgent(feedbackq, feedback_gateway, feedback_frequency)
+t.start()
 
 #
 # Start Listener thread.
