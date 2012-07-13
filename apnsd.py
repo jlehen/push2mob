@@ -86,10 +86,11 @@ class PersistentQueue(Queue.Queue):
 
 class APNSAgent(threading.Thread):
 
-    def __init__(self, queue):
+    def __init__(self, queue, gateway):
         threading.Thread.__init__(self)
         self.daemon = True
         self.queue = queue
+        self.gateway = gateway
 
     def run(self):
         while True:
@@ -104,6 +105,25 @@ class APNSAgent(threading.Thread):
                 len(payload), payload)
             hexdump(binmsg)
             time.sleep(random.randint(3, 9))
+
+
+class FeedbackAgent(threading.Thread):
+
+    def __init__(self, queue, gateway, frequency):
+        threading.Thread.__init__(self)
+        self.daemon = True
+        self.queue = queue
+        self.gateway = gateway
+        self.freqency = frequency
+
+    def run(self):
+        # open socket in non-blocking mode
+        while True:
+            # while read buf
+            #   break if EAGAIN
+            #   (time, toklen, devtok) = struct.unpack("> I H 32s", but)
+            #   self.queue.put((time, base64.standard_b64encode(devtok)))
+            time.sleep(frequency)
 
 
 class Listener(threading.Thread):
