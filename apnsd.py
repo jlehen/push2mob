@@ -131,6 +131,8 @@ class FeedbackAgent(threading.Thread):
 
 class Listener(threading.Thread):
 
+    whtsp = re.compile("\s+")
+
     def __init__(self, sqlitedb, zmqsock, apnsq, feedbackq):
         threading.Thread.__init__(self)
         self.sqlitedb = sqlitedb
@@ -145,11 +147,62 @@ class Listener(threading.Thread):
             logging.warning(fmt, detail)
         else:
             logging.warning(msg)
-        zmqsock.send("ERROR " + msg)
+        self.zmqsock.send("ERROR " + msg)
+
+    def _parse_send(self, msg):
+        cmdargs = msg[5:]
+        try:
+            l = re.split(Listener.whtsp, cmdargs, 1)
+            ntok = int(l[0])
+            l = re.split(Listener.whtsp, l[1], ntok)
+            devtoks = l[0:ntok]
+            payload = l[ntok]
+        except IndexError as e:
+            Listener.error("Invalid input", msg)
+            return None
+
+        goodtoks = []
+        wrongtok = 0
+        for dt in devtoks:
+            if wrongtok:
+                    break
+            devtok = ''
+            if len(dt) == DEVTOKLEN * 2:
+                # Hexadecimal device token.
+                for i in range(0, DEVTOKLEN * 2, 2):
+                    c = dt[i:i+2]
+                    devtok = devtok + struct.pack('B', int(c, 16))
+            else:
+                # Maybe base64?
+                try:
+                    devtok = base64.standard_b64decode(dt)
+                except TypeError:
+                    Listener.error("Wrong base64 encoding for device " \
+                        "token: %s" % dt)
+                    wrongtok = 1
+                    continue
+            if len(devtok) != DEVTOKLEN:
+                Listener.error("Wrong device token length " \
+                    "(%d != %s): %s" % (len(devtok), DEVTOKLEN, dt))
+                wrongtok = 1
+                continue
+            # Store the token in base64 in the queue, text is better
+            # to debug.
+            logging.debug("new devtok %s" % \
+                base64.standard_b64encode(devtok))
+            goodtoks.append(base64.standard_b64encode(devtok))
+        devtoks = goodtoks
+        if wrongtok:
+            return None
+
+        if len(payload) > PAYLOADMAXLEN:
+            Listener.error("Payload too long (%d > %d)" % len(payload),
+                PAYLOADMAXLEN, payload)
+            return None
+
+        return (devtoks, payload)
 
     def run(self):
-        zmqsock = self.zmqsock
-        apnsq = self.apnsq
         feedbackq = self.feedbackq
 
         # Get current notification identifier.
@@ -166,74 +219,27 @@ class Listener(threading.Thread):
         curid = row[0]
         logging.info("Notifications current identifier is %d" % curid)
 
-        whtsp = re.compile("\s+")
         while True:
             msg = self.zmqsock.recv()
             #
             # Parse line.
             msg = msg.strip()
-            if msg[0:5].lower().find("send ") == -1:
-                Listener.error("Invalid input", msg)
-                continue
-            cmdargs = msg[5:]
-            try:
-                l = re.split(whtsp, cmdargs, 1)
-                ntok = int(l[0])
-                l = re.split(whtsp, l[1], ntok)
-                devtoks = l[0:ntok]
-                payload = l[ntok]
-            except IndexError as e:
-                Listener.error("Invalid input", msg)
-                continue
-            #
-            # Check device tokens.
-            goodtoks = []
-            wrongtok = 0
-            for dt in devtoks:
-                if wrongtok:
-                        break
-                devtok = ''
-                if len(dt) == DEVTOKLEN * 2:
-                    # Hexadecimal device token.
-                    for i in range(0, DEVTOKLEN * 2, 2):
-                        c = dt[i:i+2]
-                        devtok = devtok + struct.pack('B', int(c, 16))
-                else:
-                    # Maybe base64?
-                    try:
-                        devtok = base64.standard_b64decode(dt)
-                    except TypeError:
-                        Listener.error("Wrong base64 encoding for device " \
-                            "token: %s" % dt)
-                        wrongtok = 1
-                        continue
-                if len(devtok) != DEVTOKLEN:
-                    Listener.error("Wrong device token length " \
-                        "(%d != %s): %s" % (len(devtok), DEVTOKLEN, dt))
-                    wrongtok = 1
+            if msg[0:5].lower().find("send ") != -1:
+                res = self._parse_send(msg)
+                if res == None:
                     continue
-                # Store the token in base64 in the queue, text is better
-                # to debug.
-                logging.debug("new devtok %s" % \
-                    base64.standard_b64encode(devtok))
-                goodtoks.append(base64.standard_b64encode(devtok))
-            devtoks = goodtoks
-            if wrongtok:
+                devtoks, payload = res
+                sqlcur.execute('UPDATE ident SET cur=?',
+                    (curid + len(devtoks), ))
+                #
+                # Enqueue notifications.
+                for devtok in devtoks:
+                    self.apnsq.put((curid, devtok, payload))
+                    curid = curid + 1
+                self.zmqsock.send("OK I'll promise I'll do my best!")
                 continue
-            #
-            #
-            if len(payload) > PAYLOADMAXLEN:
-                Listener.error("Payload too long (%d > %d)" % len(payload),
-                    PAYLOADMAXLEN, payload)
-                continue
-            #
-            # Enqueue notifications.
-            sqlcur.execute('UPDATE ident SET cur=?', (curid + ntok, ))
-            for devtok in devtoks:
-                apnsq.put((curid, devtok, payload))
-                curid = curid + 1
-            zmqsock.send("OK I'll promise I'll do my best!")
 
+            Listener.error("Invalid input", msg)
 
 #
 # Get configuration.
