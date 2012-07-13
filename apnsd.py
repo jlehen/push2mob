@@ -118,6 +118,7 @@ class FeedbackAgent(threading.Thread):
         self.queue = queue
         self.gateway = gateway
         self.frequency = frequency
+        self.queue.put((12345678890, "ABCDEF="))
 
     def run(self):
         # open socket in non-blocking mode
@@ -140,8 +141,7 @@ class Listener(threading.Thread):
         self.apnsq = apnsq
         self.feedbackq = feedbackq
 
-    @staticmethod
-    def error(msg, detail = None):
+    def _error(self, msg, detail = None):
         if detail is not None:
             fmt = msg + ": %s"
             logging.warning(fmt, detail)
@@ -158,7 +158,7 @@ class Listener(threading.Thread):
             devtoks = l[0:ntok]
             payload = l[ntok]
         except IndexError as e:
-            Listener.error("Invalid input", msg)
+            self._error("Invalid input", msg)
             return None
 
         goodtoks = []
@@ -177,12 +177,12 @@ class Listener(threading.Thread):
                 try:
                     devtok = base64.standard_b64decode(dt)
                 except TypeError:
-                    Listener.error("Wrong base64 encoding for device " \
+                    self._error("Wrong base64 encoding for device " \
                         "token: %s" % dt)
                     wrongtok = 1
                     continue
             if len(devtok) != DEVTOKLEN:
-                Listener.error("Wrong device token length " \
+                self._error("Wrong device token length " \
                     "(%d != %s): %s" % (len(devtok), DEVTOKLEN, dt))
                 wrongtok = 1
                 continue
@@ -196,14 +196,13 @@ class Listener(threading.Thread):
             return None
 
         if len(payload) > PAYLOADMAXLEN:
-            Listener.error("Payload too long (%d > %d)" % len(payload),
+            self._error("Payload too long (%d > %d)" % len(payload),
                 PAYLOADMAXLEN, payload)
             return None
 
         return (devtoks, payload)
 
     def run(self):
-        feedbackq = self.feedbackq
 
         # Get current notification identifier.
         sqlcon = sqlite3.connect(self.sqlitedb)
@@ -224,7 +223,7 @@ class Listener(threading.Thread):
             #
             # Parse line.
             msg = msg.strip()
-            if msg[0:5].lower().find("send ") != -1:
+            if msg[0:5].lower().find("send ") == 0:
                 res = self._parse_send(msg)
                 if res == None:
                     continue
@@ -239,7 +238,22 @@ class Listener(threading.Thread):
                 self.zmqsock.send("OK I'll promise I'll do my best!")
                 continue
 
-            Listener.error("Invalid input", msg)
+            elif msg.lower().find("feedback") == 0:
+                feedbacks = []
+                try:
+                    while True:
+                        timestamp, devtok = self.feedbackq.get_nowait()
+                        feedbacks.append("%s:%s" % (timestamp, devtok))
+                except Queue.Empty:
+                        pass
+                if len(feedbacks) == 0:
+                    self.zmqsock.send("0")
+                else:
+                    self.zmqsock.send(str(len(feedbacks)) + " " +
+                        ' '.join(feedbacks))
+                continue
+
+            self._error("Invalid input", msg)
 
 #
 # Get configuration.
