@@ -140,12 +140,12 @@ else:
 #
 # Creation ZMQ sockets early so we don't waste other resource if it fails.
 #
-logging.info("Notifications ZMQ PULL socket bound on tcp://%s" %
+logging.info("Notifications ZMQ REP socket bound on tcp://%s" %
     zmq_bind)
 try:
     zmqctx_r = zmq.Context()
-    zmqrcv = zmqctx_r.socket(zmq.PULL)
-    zmqrcv.bind("tcp://%s" % zmq_bind)
+    zmqsock = zmqctx_r.socket(zmq.REP)
+    zmqsock.bind("tcp://%s" % zmq_bind)
 except zmq.core.error.ZMQError as e:
     print e
     sys.exit(2)
@@ -187,12 +187,13 @@ for i in range(apns_concurrency):
 #
 whtsp = re.compile("\s+")
 while True:
-    msg = zmqrcv.recv()
+    msg = zmqsock.recv()
     #
     # Parse line.
     msg = msg.strip()
     if msg[0:5].lower().find("send ") == -1:
         logging.warning("Invalid input: %s" % msg)
+        zmqsock.send("ERROR Invalid input")
         continue
     cmdargs = msg[5:]
     try:
@@ -203,11 +204,15 @@ while True:
         payload = l[ntok]
     except IndexError as e:
         logging.warning("Invalid input: %s" % msg)
+        zmqsock.send("ERROR Invalid input")
         continue
     #
     # Check device tokens.
     goodtoks = []
+    wrongtok = 0
     for dt in devtoks:
+        if wrongtok:
+                break
         devtok = ''
         if len(dt) == 64:
             # Hexadecimal device token.
@@ -221,18 +226,35 @@ while True:
             except TypeError:
                 logging.warning("Wrong base64 encoding for device " \
                     "token: %s" % dt)
+                zmqsock.send("ERROR Wrong base64 encoding for device " \
+                    "token: %s" % dt)
+                wrongtok = 1
                 continue
         if len(devtok) != 32:
             logging.warning("Wrong device token length (%d != 32): %s" %
                 (len(devtok), dt))
+            zmqsock.send("ERROR Wrong device token length (%d != 32): %s" %
+                (len(devtok), dt))
+            wrongtok = 1
             continue
         # Store the token in base64 in the queue, text is better to debug.
         logging.debug("new devtok %s" % base64.standard_b64encode(devtok))
         goodtoks.append(base64.standard_b64encode(devtok))
     devtoks = goodtoks
+    if wrongtok:
+        continue
+    #
+    #
+    if len(payload) > 256:
+        logging.warning("Payload too long (%d > 256): %s" %
+            (len(payload), payload))
+        zmqsock.send("ERROR Payload too long (%d > 256): %s" %
+            (len(payload), payload))
+        continue
     #
     # Enqueue notifications.
     sqlcur.execute('UPDATE ident SET cur=?', (curid + ntok, ))
     for devtok in devtoks:
         apnsq.put((curid, devtok, payload))
         curid = curid + 1
+    zmqsock.send("OK")
