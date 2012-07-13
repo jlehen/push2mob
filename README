@@ -1,0 +1,46 @@
+I. DESCRIPTION
+
+py-apnsd is a Python daemon designed to communicate efficiently with the
+Apple Push Notification Service (APNS).  It handles both notification and
+feedback services.
+
+It is controlled through a ZeroMQ REQ/REP socket with an extremely simple
+communication protocol.
+
+
+II. PROTOCOL
+
+1. Commands
+
+Syntax in BNF:
+
+  command = ( send | "feedback" )
+  send = "send" number devicetokens payload
+  devicetokens = ( devicetoken_hex | devicetoken_base64 ) [ devicetokens ]
+
+The ``number'' in the ``send'' command is the number of following device
+tokens, which may be specified in hexadecimal or base64.  The ``payload''
+must not be larger than 256 bytes.  This is a limit enforced by APNS.
+
+2. Replies
+
+For each command, the server replies one message, begining with either
+"OK" or "ERROR".
+
+In case of error, an informative message follows the "ERROR" string.
+
+For the ``send'' command, the string following "OK" is irrelevant.
+For the ``feedback'' command here is the "OK" replies BNF syntax:
+
+  ok = "OK" number feedbacktokens
+  feedbacktokens = timestamp":"devicetoken_base64 [feedbacktokens]
+
+The ``number'' is the number of following feedback tokens.  The ``timestamp''
+is a timestamp in the Unix format, as provided by APNS.
+
+
+III. DESIGN
+
+To be done: Explain:
+- Threads
+- Persistent queues using SQLite
