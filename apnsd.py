@@ -34,6 +34,9 @@ import time
 import sys
 import zmq
 
+DEVTOKLEN = 32
+PAYLOADMAXLEN = 256
+
 def now():
 
        return int(time.time())
@@ -190,9 +193,9 @@ class Listener(threading.Thread):
                 if wrongtok:
                         break
                 devtok = ''
-                if len(dt) == 64:
+                if len(dt) == DEVTOKLEN * 2:
                     # Hexadecimal device token.
-                    for i in range(0, 64, 2):
+                    for i in range(0, DEVTOKLEN * 2, 2):
                         c = dt[i:i+2]
                         devtok = devtok + struct.pack('B', int(c, 16))
                 else:
@@ -204,9 +207,9 @@ class Listener(threading.Thread):
                             "token: %s" % dt)
                         wrongtok = 1
                         continue
-                if len(devtok) != 32:
+                if len(devtok) != DEVTOKLEN:
                     Listener.error("Wrong device token length " \
-                        "(%d != 32): %s" % (len(devtok), dt))
+                        "(%d != %s): %s" % (len(devtok), DEVTOKLEN, dt))
                     wrongtok = 1
                     continue
                 # Store the token in base64 in the queue, text is better
@@ -219,9 +222,9 @@ class Listener(threading.Thread):
                 continue
             #
             #
-            if len(payload) > 256:
-                Listener.error("Payload too long (%d > 256)" % len(payload),
-                    payload)
+            if len(payload) > PAYLOADMAXLEN:
+                Listener.error("Payload too long (%d > %d)" % len(payload),
+                    PAYLOADMAXLEN, payload)
                 continue
             #
             # Enqueue notifications.
