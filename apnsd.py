@@ -106,6 +106,112 @@ class APNSAgent(threading.Thread):
             time.sleep(random.randint(3, 9))
 
 
+class Listener(threading.Thread):
+
+    def __init__(self, sqlitedb, zmqsock, apnsq, feedbackq):
+        threading.Thread.__init__(self)
+        self.sqlitedb = sqlitedb
+        self.zmqsock = zmqsock
+        self.apnsq = apnsq
+        self.feedbackq = feedbackq
+
+    @staticmethod
+    def error(msg, detail = None):
+        if detail is not None:
+            fmt = msg + ": %s"
+            logging.warning(fmt, detail)
+        else:
+            logging.warning(msg)
+        zmqsock.send("ERROR " + msg)
+
+    def run(self):
+        zmqsock = self.zmqsock
+        apnsq = self.apnsq
+        feedbackq = self.feedbackq
+
+        # Get current notification identifier.
+        sqlcon = sqlite3.connect(self.sqlitedb)
+        sqlcon.isolation_level = None
+        sqlcur = sqlcon.cursor()
+        sqlcur.execute('CREATE TABLE IF NOT EXISTS ' \
+            'ident(cur INTEGER PRIMARY KEY);')
+        sqlcur.execute('SELECT cur FROM ident;')
+        row = sqlcur.fetchone()
+        if row is None:
+            sqlcur.execute('INSERT INTO ident VALUES(0);')
+            row = (0,)
+        curid = row[0]
+        logging.info("Notifications current identifier is %d" % curid)
+
+        whtsp = re.compile("\s+")
+        while True:
+            msg = self.zmqsock.recv()
+            #
+            # Parse line.
+            msg = msg.strip()
+            if msg[0:5].lower().find("send ") == -1:
+                Listener.error("Invalid input", msg)
+                continue
+            cmdargs = msg[5:]
+            try:
+                l = re.split(whtsp, cmdargs, 1)
+                ntok = int(l[0])
+                l = re.split(whtsp, l[1], ntok)
+                devtoks = l[0:ntok]
+                payload = l[ntok]
+            except IndexError as e:
+                Listener.error("Invalid input", msg)
+                continue
+            #
+            # Check device tokens.
+            goodtoks = []
+            wrongtok = 0
+            for dt in devtoks:
+                if wrongtok:
+                        break
+                devtok = ''
+                if len(dt) == 64:
+                    # Hexadecimal device token.
+                    for i in range(0, 64, 2):
+                        c = dt[i:i+2]
+                        devtok = devtok + struct.pack('B', int(c, 16))
+                else:
+                    # Maybe base64?
+                    try:
+                        devtok = base64.standard_b64decode(dt)
+                    except TypeError:
+                        Listener.error("Wrong base64 encoding for device " \
+                            "token: %s" % dt)
+                        wrongtok = 1
+                        continue
+                if len(devtok) != 32:
+                    Listener.error("Wrong device token length " \
+                        "(%d != 32): %s" % (len(devtok), dt))
+                    wrongtok = 1
+                    continue
+                # Store the token in base64 in the queue, text is better
+                # to debug.
+                logging.debug("new devtok %s" % \
+                    base64.standard_b64encode(devtok))
+                goodtoks.append(base64.standard_b64encode(devtok))
+            devtoks = goodtoks
+            if wrongtok:
+                continue
+            #
+            #
+            if len(payload) > 256:
+                Listener.error("Payload too long (%d > 256)" % len(payload),
+                    payload)
+                continue
+            #
+            # Enqueue notifications.
+            sqlcur.execute('UPDATE ident SET cur=?', (curid + ntok, ))
+            for devtok in devtoks:
+                apnsq.put((curid, devtok, payload))
+                curid = curid + 1
+            zmqsock.send("OK I'll promise I'll do my best!")
+
+
 #
 # Get configuration.
 #
@@ -161,21 +267,6 @@ logging.info("%d feedbacks retrieved from persistent storage" %
     feedbackq.qsize())
 
 #
-# Get current notification identifier.
-#
-sqlcon = sqlite3.connect(sqlitedb)
-sqlcon.isolation_level = None
-sqlcur = sqlcon.cursor()
-sqlcur.execute('CREATE TABLE IF NOT EXISTS ident(cur INTEGER PRIMARY KEY);')
-sqlcur.execute('SELECT cur FROM ident;')
-row = sqlcur.fetchone()
-if row is None:
-    sqlcur.execute('INSERT INTO ident VALUES(0);')
-    row = (0,)
-curid = row[0]
-logging.info("Notifications current identifier is %d" % curid)
-
-#
 # Start APNS threads.
 #
 for i in range(apns_concurrency):
@@ -183,78 +274,7 @@ for i in range(apns_concurrency):
     t.start()
 
 #
-# Main job, receiving notifications orders.
+# Start Listener thread.
 #
-whtsp = re.compile("\s+")
-while True:
-    msg = zmqsock.recv()
-    #
-    # Parse line.
-    msg = msg.strip()
-    if msg[0:5].lower().find("send ") == -1:
-        logging.warning("Invalid input: %s" % msg)
-        zmqsock.send("ERROR Invalid input")
-        continue
-    cmdargs = msg[5:]
-    try:
-        l = re.split(whtsp, cmdargs, 1)
-        ntok = int(l[0])
-        l = re.split(whtsp, l[1], ntok)
-        devtoks = l[0:ntok]
-        payload = l[ntok]
-    except IndexError as e:
-        logging.warning("Invalid input: %s" % msg)
-        zmqsock.send("ERROR Invalid input")
-        continue
-    #
-    # Check device tokens.
-    goodtoks = []
-    wrongtok = 0
-    for dt in devtoks:
-        if wrongtok:
-                break
-        devtok = ''
-        if len(dt) == 64:
-            # Hexadecimal device token.
-            for i in range(0, 64, 2):
-                c = dt[i:i+2]
-                devtok = devtok + struct.pack('B', int(c, 16))
-        else:
-            # Maybe base64?
-            try:
-                devtok = base64.standard_b64decode(dt)
-            except TypeError:
-                logging.warning("Wrong base64 encoding for device " \
-                    "token: %s" % dt)
-                zmqsock.send("ERROR Wrong base64 encoding for device " \
-                    "token: %s" % dt)
-                wrongtok = 1
-                continue
-        if len(devtok) != 32:
-            logging.warning("Wrong device token length (%d != 32): %s" %
-                (len(devtok), dt))
-            zmqsock.send("ERROR Wrong device token length (%d != 32): %s" %
-                (len(devtok), dt))
-            wrongtok = 1
-            continue
-        # Store the token in base64 in the queue, text is better to debug.
-        logging.debug("new devtok %s" % base64.standard_b64encode(devtok))
-        goodtoks.append(base64.standard_b64encode(devtok))
-    devtoks = goodtoks
-    if wrongtok:
-        continue
-    #
-    #
-    if len(payload) > 256:
-        logging.warning("Payload too long (%d > 256): %s" %
-            (len(payload), payload))
-        zmqsock.send("ERROR Payload too long (%d > 256): %s" %
-            (len(payload), payload))
-        continue
-    #
-    # Enqueue notifications.
-    sqlcur.execute('UPDATE ident SET cur=?', (curid + ntok, ))
-    for devtok in devtoks:
-        apnsq.put((curid, devtok, payload))
-        curid = curid + 1
-    zmqsock.send("OK")
+t = Listener(sqlitedb, zmqsock, apnsq, feedbackq)
+t.run()
