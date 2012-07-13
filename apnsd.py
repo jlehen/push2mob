@@ -247,9 +247,9 @@ class Listener(threading.Thread):
                 except Queue.Empty:
                         pass
                 if len(feedbacks) == 0:
-                    self.zmqsock.send("0")
+                    self.zmqsock.send("OK 0")
                 else:
-                    self.zmqsock.send(str(len(feedbacks)) + " " +
+                    self.zmqsock.send("OK " + str(len(feedbacks)) + " " +
                         ' '.join(feedbacks))
                 continue
 
