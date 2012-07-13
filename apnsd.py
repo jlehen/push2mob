@@ -117,7 +117,7 @@ class FeedbackAgent(threading.Thread):
         self.daemon = True
         self.queue = queue
         self.gateway = gateway
-        self.freqency = frequency
+        self.frequency = frequency
 
     def run(self):
         # open socket in non-blocking mode
@@ -126,7 +126,7 @@ class FeedbackAgent(threading.Thread):
             #   break if EAGAIN
             #   (time, toklen, devtok) = struct.unpack("> I H 32s", but)
             #   self.queue.put((time, base64.standard_b64encode(devtok)))
-            time.sleep(frequency)
+            time.sleep(self.frequency)
 
 
 class Listener(threading.Thread):
