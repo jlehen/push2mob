@@ -89,25 +89,34 @@ class PersistentQueue(Queue.Queue):
 
 class APNSAgent(threading.Thread):
 
-    def __init__(self, queue, gateway):
+    def __init__(self, queue, gateway, maxlag):
         threading.Thread.__init__(self)
         self.daemon = True
         self.queue = queue
         self.gateway = gateway
+        self.maxlag = maxlag
 
     def run(self):
         while True:
-            ident, devtok, payload = self.queue.get()
+            ident, curtime, devtok, payload = self.queue.get()
+            lag = now() - curtime
+            if lag > self.maxlag:
+                logging.debug("Discarding notification #%d to %s (%s): " \
+                    "delayed by %us (max %us)" %
+                    (ident, devtok, asciitok, lag, self.maxlag))
+                time.sleep(random.randint(1, 3))    # DEVEL
+                continue
             bintok = base64.standard_b64decode(devtok)
             asciitok = ''.join("%02x" % ord(c) for c in bintok)
-            logging.debug("Sending notification #%d to %s (%s): %s" %
-                (ident, devtok, asciitok, payload))
+            logging.debug("Sending notification #%d to %s (%s), " \
+                "lagging by %us: %s" %
+                (ident, devtok, asciitok, lag, payload))
             fmt = '> B II' + 'H' + str(len(bintok)) + 's' + \
                 'H' + str(len(payload)) + 's'
             binmsg = struct.pack(fmt, 1, ident, now(), len(bintok), bintok,
                 len(payload), payload)
             hexdump(binmsg)
-            time.sleep(random.randint(3, 9))
+            time.sleep(random.randint(3, 9))    # DEVEL
 
 
 class FeedbackAgent(threading.Thread):
@@ -194,7 +203,7 @@ class Listener(threading.Thread):
                 continue
             # Store the token in base64 in the queue, text is better
             # to debug.
-            logging.debug("new devtok %s" % \
+            logging.debug("Got notification for device token %s" % \
                 base64.standard_b64encode(devtok))
             goodtoks.append(base64.standard_b64encode(devtok))
         devtoks = goodtoks
@@ -238,8 +247,9 @@ class Listener(threading.Thread):
                     (curid + len(devtoks), ))
                 #
                 # Enqueue notifications.
+                curtime = now()
                 for devtok in devtoks:
-                    self.apnsq.put((curid, devtok, payload))
+                    self.apnsq.put((curid, curtime, devtok, payload))
                     curid = curid + 1
                 self.zmqsock.send("OK I'll promise I'll do my best!")
                 continue
@@ -277,6 +287,7 @@ try:
     logfile = cp.get('apnsd', 'logfile')
     apns_gateway = cp.get('apns', 'gateway')
     apns_concurrency = int(cp.get('apns', 'concurrency'))
+    apns_max_lag = int(cp.get('apns', 'max_lag'))
     feedback_gateway = cp.get('feedback', 'gateway')
     feedback_frequency = int(cp.get('feedback', 'frequency'))
     feedback_devtok_format = cp.get('feedback', 'device_token_format')
@@ -325,7 +336,7 @@ logging.info("%d feedbacks retrieved from persistent storage" %
 # Start APNS threads and Feedback one.
 #
 for i in range(apns_concurrency):
-    t = APNSAgent(apnsq, apns_gateway)
+    t = APNSAgent(apnsq, apns_gateway, apns_max_lag)
     t.start()
 
 t = FeedbackAgent(feedbackq, feedback_gateway, feedback_frequency,
