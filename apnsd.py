@@ -112,12 +112,13 @@ class APNSAgent(threading.Thread):
 
 class FeedbackAgent(threading.Thread):
 
-    def __init__(self, queue, gateway, frequency):
+    def __init__(self, queue, gateway, frequency, devtok_format):
         threading.Thread.__init__(self)
         self.daemon = True
         self.queue = queue
         self.gateway = gateway
         self.frequency = frequency
+        self.devtok_format = devtok_format
         self.queue.put((12345678890, "ABCDEF="))
 
     def run(self):
@@ -126,7 +127,12 @@ class FeedbackAgent(threading.Thread):
             # while read buf
             #   break if EAGAIN
             #   (time, toklen, devtok) = struct.unpack("> I H 32s", but)
-            #   self.queue.put((time, base64.standard_b64encode(devtok)))
+            #   if self.devtok_format == "base64":
+            #       self.queue.put((str(time),
+            #           base64.standard_b64encode(devtok)))
+            #   else:
+            #       self.queue.put((str(time),
+            #           ''.join("%02x" % ord(c) for c in devtok)))
             time.sleep(self.frequency)
 
 
@@ -273,6 +279,7 @@ try:
     apns_concurrency = int(cp.get('apns', 'concurrency'))
     feedback_gateway = cp.get('feedback', 'gateway')
     feedback_frequency = int(cp.get('feedback', 'frequency'))
+    feedback_devtok_format = cp.get('feedback', 'device_token_format')
 except ConfigParser.Error as e:
     logging.error("%s: %s" % (CONFIGFILE, e))
     sys.exit(1)
@@ -285,6 +292,11 @@ else:
         logging.basicConfig(filename=logfile, level=logging.DEBUG,
             format='%(asctime)s %(message)s',
             datefmt='%Y/%m/%d %H:%M:%S')
+
+if feedback_devtok_format != 'base64' and feedback_devtok_format != 'hex':
+    logging.error("%s: Unknown device token format: %s" %
+        (CONFIGFILE, feedback_devtok_format))
+    sys.exit(1)
 
 #
 # Creation ZMQ sockets early so we don't waste other resource if it fails.
@@ -316,7 +328,8 @@ for i in range(apns_concurrency):
     t = APNSAgent(apnsq, apns_gateway)
     t.start()
 
-t = FeedbackAgent(feedbackq, feedback_gateway, feedback_frequency)
+t = FeedbackAgent(feedbackq, feedback_gateway, feedback_frequency,
+    feedback_devtok_format)
 t.start()
 
 #
