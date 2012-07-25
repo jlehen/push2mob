@@ -99,7 +99,7 @@ class TLSConnectionMaker:
 
     # This has to be called before any object is created.
     @classmethod
-    configure(c, cacerts, cert, key):
+    def configure(c, cacerts, cert, key):
         """
         Configures the CA, certificate and key files to be used when
         creating a connection.
@@ -114,7 +114,7 @@ class TLSConnectionMaker:
         Creates an SSL socket to the given `peer', which is a tuple
         (host, port).
         """
-        assert c.cacerts in not None
+        assert c.cacerts is not None
         ai = socket.getaddrinfo(peer[0], peer[1], 0, 0, socket.IPPROTO_TCP)
         s = socket.socket(ai[0][0], ai[0][1], ai[0][2])
         sslsock = ssl.wrap_socket(s, keyfile=c.key, certfile=c.cert,
