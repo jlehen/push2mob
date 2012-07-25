@@ -283,8 +283,8 @@ if len(l) == 0:
 
 try:
     zmq_bind = cp.get('apnsd', 'zmq_bind')
-    sqlitedb = cp.get('apnsd', 'sqlitedb')
-    logfile = cp.get('apnsd', 'logfile')
+    sqlitedb = cp.get('apnsd', 'sqlite_db')
+    logfile = cp.get('apnsd', 'log_file')
     apns_gateway = cp.get('apns', 'gateway')
     apns_concurrency = int(cp.get('apns', 'concurrency'))
     apns_max_lag = int(cp.get('apns', 'max_lag'))
