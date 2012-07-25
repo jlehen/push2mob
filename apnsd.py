@@ -27,15 +27,19 @@ import base64
 import logging
 import random
 import re
+import socket
 import sqlite3
+import ssl
 import struct
+import sys
 import threading
 import time
-import sys
 import zmq
 
 DEVTOKLEN = 32
 PAYLOADMAXLEN = 256
+MAXTRIAL = 2
+RESPONSEWAIT = 0.5
 
 def now():
 
@@ -87,7 +91,52 @@ class PersistentQueue(Queue.Queue):
         return r[1]
 
 
+class TLSConnectionMaker:
+    """
+    This is a socket.SSLSocket factory with pre-configured CA, cert
+    and key files.
+    """
+
+    # This has to be called before any object is created.
+    @classmethod
+    configure(c, cacerts, cert, key):
+        """
+        Configures the CA, certificate and key files to be used when
+        creating a connection.
+        """
+        c.cacerts = cacerts
+        c.cert = cert
+        c.key = key
+
+    @classmethod
+    def connect(c, peer):
+        """
+        Creates an SSL socket to the given `peer', which is a tuple
+        (host, port).
+        """
+        assert c.cacerts in not None
+        ai = socket.getaddrinfo(peer[0], peer[1], 0, 0, socket.IPPROTO_TCP)
+        s = socket.socket(ai[0][0], ai[0][1], ai[0][2])
+        sslsock = ssl.wrap_socket(s, keyfile=c.key, certfile=c.cert,
+            server_side=False, cert_reqs=ssl.CERT_REQUIRED, ca_certs=cacerts)
+        sslsock.connect(ai[0][4])
+        return sslsock
+
+
 class APNSAgent(threading.Thread):
+
+    _error_responses = {
+        0: "No error encourtered",
+        1: "Processing error",
+        2: "Missing device token",
+        3: "Missing topic",
+        4: "Missing payload",
+        5: "Invalid token size",
+        6: "Invalid topic size",
+        6: "Invalid payload size",
+        7: "Invalid token",
+        255: "None (unknown)"
+    }
 
     def __init__(self, queue, gateway, maxlag):
         threading.Thread.__init__(self)
@@ -95,17 +144,29 @@ class APNSAgent(threading.Thread):
         self.queue = queue
         self.gateway = gateway
         self.maxlag = maxlag
+        self.sock = None
+
+    def _connect(self):
+        try:
+            self.sock = TLSConnectionMaker.connect(self.gateway)
+        except Exception as e:
+            logging.error("Couldn't connect to APNS (%s:%d): %s" %
+                (self.gateway[0], self.gateway[1], e))
+            sys.exit(3)
+        self.sock.settimeout(0)
 
     def run(self):
         while True:
             ident, curtime, devtok, payload = self.queue.get()
             lag = now() - curtime
             if lag > self.maxlag:
-                logging.debug("Discarding notification #%d to %s (%s): " \
+                logging.info("Discarding notification #%d to %s (%s): " \
                     "delayed by %us (max %us)" %
                     (ident, devtok, asciitok, lag, self.maxlag))
                 time.sleep(random.randint(1, 3))    # DEVEL
                 continue
+
+            # Build the binary message.
             bintok = base64.standard_b64decode(devtok)
             asciitok = ''.join("%02x" % ord(c) for c in bintok)
             logging.debug("Sending notification #%d to %s (%s), " \
@@ -116,7 +177,49 @@ class APNSAgent(threading.Thread):
             binmsg = struct.pack(fmt, 1, ident, now(), len(bintok), bintok,
                 len(payload), payload)
             hexdump(binmsg)
-            time.sleep(random.randint(3, 9))    # DEVEL
+            
+            # Now send it.
+            if self.sock is None:
+                self._connect()
+            else:
+                # Receive a possible error in the preceeding message.
+                self.sock.setblocking(0)
+                try:
+                    bufsize = self.sock.recv(buf)
+                    # Bad...
+                    cmd, st, ident2 = struct.unpack('>BBI', buf)
+                    idmismatch = ''
+                    if ident != ident2:
+                        idmismatch = ' (identifier mismatch: #%d)' % ident2
+                    logging.warning("Notification #%d to %s (%s) response: " \
+                        "%s%s" % (ident, devtok, asciitok,
+                         APNSAgent._error_responses[st], idmismatch))
+                    self.sock.close()       # Yes, close abruptly.
+                    self._connect()
+                except sockettimeout as e:
+                    # Good!  If APNS didn't sent anything, our message has
+                    # been accepted
+                    pass
+                self.sock.setblocking(1)
+
+            trial = 0
+            while trial < MAXTRIAL:
+                try:
+                    self.sock.sendall(binmsg)
+                    break
+                except socket.error as e:
+                    trial = trial + 1
+                    logging.info("Failed attempt %d to send notification "
+                        "#%d to %s (%s) (trial %d): %s" %
+                        (trial, ident, devtok, asciitok, e))
+                    self.sock.shutdown(socket.SHUT_RDWR)
+                    self.sock.close()
+                    self._connect()
+                    continue
+            if trial == MAXTRIAL:
+                logging.warning("Couldn't send notification #%d to %s (%s), "
+                    "abording" % (ident, devtok, asciitok))
+                continue
 
 
 class FeedbackAgent(threading.Thread):
@@ -285,6 +388,9 @@ try:
     zmq_bind = cp.get('apnsd', 'zmq_bind')
     sqlitedb = cp.get('apnsd', 'sqlite_db')
     logfile = cp.get('apnsd', 'log_file')
+    cacerts = cp.get('apnsd', 'cacerts_file')
+    cert = cp.get('apnsd', 'cert_file')
+    key = cp.get('apnsd', 'key_file')
     apns_gateway = cp.get('apns', 'gateway')
     apns_concurrency = int(cp.get('apns', 'concurrency'))
     apns_max_lag = int(cp.get('apns', 'max_lag'))
@@ -307,6 +413,30 @@ else:
 if feedback_devtok_format != 'base64' and feedback_devtok_format != 'hex':
     logging.error("%s: Unknown device token format: %s" %
         (CONFIGFILE, feedback_devtok_format))
+    sys.exit(1)
+
+#
+# Check APNS/feedback TLS connections.
+#
+TLSConnectionMaker.configure(cacerts, cert, key)
+try:
+    l = apns_gateway.split(':', 2)
+    apns_gateway = tuple(l)
+    s = TLSConnectionMaker.connect(apns_gateway)
+    s.close()
+except Exception as e:
+    logging.error("%s: Cannot connect to APNS: %s" % (CONFIGFILE, e))
+    sys.exit(1)
+
+try:
+    l = feedback_gateway.split(':', 2)
+    feedback_gateway = tuple(l)
+    s = TLSConnectionMaker.connect(feedback_gateway)
+    s.close()
+except:
+    logging.error("%s: Cannot connect to feedback service: %s" %
+        (CONFIGFILE, e))
+    logging.error("%s")
     sys.exit(1)
 
 #
