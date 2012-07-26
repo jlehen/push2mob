@@ -133,8 +133,8 @@ class APNSAgent(threading.Thread):
         4: "Missing payload",
         5: "Invalid token size",
         6: "Invalid topic size",
-        6: "Invalid payload size",
-        7: "Invalid token",
+        7: "Invalid payload size",
+        8: "Invalid token",
         255: "None (unknown)"
     }
 
@@ -158,6 +158,10 @@ class APNSAgent(threading.Thread):
     def run(self):
         while True:
             ident, curtime, devtok, payload = self.queue.get()
+            bintok = base64.standard_b64decode(devtok)
+            asciitok = ''.join("%02x" % ord(c) for c in bintok)
+
+            # Check notification lag.
             lag = now() - curtime
             if lag > self.maxlag:
                 logging.info("Discarding notification #%d to %s (%s): " \
@@ -167,8 +171,6 @@ class APNSAgent(threading.Thread):
                 continue
 
             # Build the binary message.
-            bintok = base64.standard_b64decode(devtok)
-            asciitok = ''.join("%02x" % ord(c) for c in bintok)
             logging.debug("Sending notification #%d to %s (%s), " \
                 "lagging by %us: %s" %
                 (ident, devtok, asciitok, lag, payload))
@@ -185,7 +187,10 @@ class APNSAgent(threading.Thread):
                 # Receive a possible error in the preceeding message.
                 self.sock.setblocking(0)
                 try:
-                    bufsize = self.sock.recv(buf)
+                    buf = self.sock.recv()
+                    if len(buf) != struct.calcsize('>BBI'):
+                        logging.debug("Unexpected APNS error response size: %d (!= %d)" %
+                            (len(buf), struct.calcsize('>BBI')))
                     # Bad...
                     cmd, st, ident2 = struct.unpack('>BBI', buf)
                     idmismatch = ''
@@ -196,7 +201,7 @@ class APNSAgent(threading.Thread):
                          APNSAgent._error_responses[st], idmismatch))
                     self.sock.close()       # Yes, close abruptly.
                     self._connect()
-                except sockettimeout as e:
+                except socket.timeout as e:
                     # Good!  If APNS didn't sent anything, our message has
                     # been accepted
                     pass
