@@ -419,6 +419,7 @@ if feedback_devtok_format != 'base64' and feedback_devtok_format != 'hex':
 # Check APNS/feedback TLS connections.
 #
 TLSConnectionMaker.configure(cacerts, cert, key)
+logging.info("Testing APNS gateway...")
 try:
     l = apns_gateway.split(':', 2)
     apns_gateway = tuple(l)
@@ -428,6 +429,7 @@ except Exception as e:
     logging.error("%s: Cannot connect to APNS: %s" % (CONFIGFILE, e))
     sys.exit(1)
 
+logging.info("Testing feedback gateway...")
 try:
     l = feedback_gateway.split(':', 2)
     feedback_gateway = tuple(l)
