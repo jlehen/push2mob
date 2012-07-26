@@ -91,6 +91,21 @@ class PersistentQueue(Queue.Queue):
             (r[0],))
         return r[1]
 
+class DeviceTokenFormater:
+
+    def __init__(self, format):
+        assert format == "base64" or format == "hex"
+        self._format = format
+
+    def __call__(self, devtok):
+        if self._format == "base64":
+           return base64.standard_b64encode(devtok)
+        else:
+            return ''.join("%02x" % ord(c) for c in devtok)
+
+# This will be used as a function.
+devtokfmt = None
+
 
 class TLSConnectionMaker:
     """
@@ -161,21 +176,20 @@ class APNSAgent(threading.Thread):
         while True:
             ident, curtime, devtok, payload = self.queue.get()
             bintok = base64.standard_b64decode(devtok)
-            asciitok = ''.join("%02x" % ord(c) for c in bintok)
 
             # Check notification lag.
             lag = now() - curtime
             if lag > self.maxlag:
-                logging.info("Discarding notification #%d to %s (%s): " \
+                logging.info("Discarding notification #%d to %s: " \
                     "delayed by %us (max %us)" %
-                    (ident, devtok, asciitok, lag, self.maxlag))
+                    (ident, devtokfmt(bintok), lag, self.maxlag))
                 time.sleep(random.randint(1, 3))    # DEVEL
                 continue
 
             # Build the binary message.
-            logging.debug("Sending notification #%d to %s (%s), " \
+            logging.debug("Sending notification #%d to %s, " \
                 "lagging by %us: %s" %
-                (ident, devtok, asciitok, lag, payload))
+                (ident, devtokfmt(bintok), lag, payload))
             fmt = '> B II' + 'H' + str(len(bintok)) + 's' + \
                 'H' + str(len(payload)) + 's'
             binmsg = struct.pack(fmt, 1, ident, now(), len(bintok), bintok,
@@ -198,8 +212,8 @@ class APNSAgent(threading.Thread):
                     idmismatch = ''
                     if lastident != errident:
                         idmismatch = ' (identifier mismatch: #%d)' % errident
-                    logging.warning("Notification #%d to %s (%s) response: " \
-                        "%s%s" % (lastident, devtok, asciitok,
+                    logging.warning("Notification #%d to %s response: " \
+                        "%s%s" % (lastident, devtokfmt(bintok),
                          APNSAgent._error_responses[st], idmismatch))
                     self.sock.close()       # Yes, close abruptly.
                     self._connect()
@@ -213,27 +227,26 @@ class APNSAgent(threading.Thread):
                 except socket.error as e:
                     trial = trial + 1
                     logging.info("Failed attempt %d to send notification "
-                        "#%d to %s (%s) (trial %d): %s" %
-                        (trial, ident, devtok, asciitok, e))
+                        "#%d to %s: %s" %
+                        (trial, ident, devtokfmt(bintok), e))
                     self.sock.shutdown(socket.SHUT_RDWR)
                     self.sock.close()
                     self._connect()
                     continue
             if trial == MAXTRIAL:
-                logging.warning("Couldn't send notification #%d to %s (%s), "
-                    "abording" % (ident, devtok, asciitok))
+                logging.warning("Couldn't send notification #%d to %s, "
+                    "abording" % (ident, devtokfmt(bintok)))
                 continue
 
 
 class FeedbackAgent(threading.Thread):
 
-    def __init__(self, queue, gateway, frequency, devtok_format):
+    def __init__(self, queue, gateway, frequency):
         threading.Thread.__init__(self)
         self.daemon = True
         self.queue = queue
         self.gateway = gateway
         self.frequency = frequency
-        self.devtok_format = devtok_format
         self.queue.put((12345678890, "ABCDEF="))
 
     def run(self):
@@ -242,12 +255,7 @@ class FeedbackAgent(threading.Thread):
             # while read buf
             #   break if EAGAIN
             #   (time, toklen, devtok) = struct.unpack("> I H 32s", but)
-            #   if self.devtok_format == "base64":
-            #       self.queue.put((str(time),
-            #           base64.standard_b64encode(devtok)))
-            #   else:
-            #       self.queue.put((str(time),
-            #           ''.join("%02x" % ord(c) for c in devtok)))
+            #   self.queue.put((str(time), devtokfmt.format(devtok)))
             time.sleep(self.frequency)
 
 
@@ -394,12 +402,12 @@ try:
     cacerts = cp.get('apnsd', 'cacerts_file')
     cert = cp.get('apnsd', 'cert_file')
     key = cp.get('apnsd', 'key_file')
+    devtok_format = cp.get('apnsd', 'device_token_format')
     apns_gateway = cp.get('apns', 'gateway')
     apns_concurrency = int(cp.get('apns', 'concurrency'))
     apns_max_lag = int(cp.get('apns', 'max_lag'))
     feedback_gateway = cp.get('feedback', 'gateway')
     feedback_frequency = int(cp.get('feedback', 'frequency'))
-    feedback_devtok_format = cp.get('feedback', 'device_token_format')
 except ConfigParser.Error as e:
     logging.error("%s: %s" % (CONFIGFILE, e))
     sys.exit(1)
@@ -413,10 +421,11 @@ else:
             format='%(asctime)s %(message)s',
             datefmt='%Y/%m/%d %H:%M:%S')
 
-if feedback_devtok_format != 'base64' and feedback_devtok_format != 'hex':
+if devtok_format != 'base64' and devtok_format != 'hex':
     logging.error("%s: Unknown device token format: %s" %
-        (CONFIGFILE, feedback_devtok_format))
+        (CONFIGFILE, devtok_format))
     sys.exit(1)
+devtokfmt = DeviceTokenFormater(devtok_format)
 
 #
 # Check APNS/feedback TLS connections.
@@ -474,8 +483,7 @@ for i in range(apns_concurrency):
     t = APNSAgent(apnsq, apns_gateway, apns_max_lag)
     t.start()
 
-t = FeedbackAgent(feedbackq, feedback_gateway, feedback_frequency,
-    feedback_devtok_format)
+t = FeedbackAgent(feedbackq, feedback_gateway, feedback_frequency)
 t.start()
 
 #
