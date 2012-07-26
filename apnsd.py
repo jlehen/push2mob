@@ -40,7 +40,6 @@ import zmq
 DEVTOKLEN = 32
 PAYLOADMAXLEN = 256
 MAXTRIAL = 2
-RESPONSEWAIT = 0.5
 
 def now():
 
@@ -155,12 +154,13 @@ class APNSAgent(threading.Thread):
         255: "None (unknown)"
     }
 
-    def __init__(self, queue, gateway, maxlag):
+    def __init__(self, queue, gateway, maxnotiflag, maxerrorwait):
         threading.Thread.__init__(self)
         self.daemon = True
         self.queue = queue
         self.gateway = gateway
-        self.maxlag = maxlag
+        self.maxnotiflag = maxnotiflag
+        self.maxerrorwait = maxerrorwait
         self.sock = None
 
     def _connect(self):
@@ -179,10 +179,10 @@ class APNSAgent(threading.Thread):
 
             # Check notification lag.
             lag = now() - curtime
-            if lag > self.maxlag:
+            if lag > self.maxnotiflag:
                 logging.info("Discarding notification #%d to %s: " \
                     "delayed by %us (max %us)" %
-                    (ident, devtokfmt(bintok), lag, self.maxlag))
+                    (ident, devtokfmt(bintok), lag, self.maxnotiflag))
                 time.sleep(random.randint(1, 3))    # DEVEL
                 continue
 
@@ -220,7 +220,7 @@ class APNSAgent(threading.Thread):
                 continue
 
             # Receive a possible error in the preceeding message.
-            triple = select.select([self.sock], [], [], RESPONSEWAIT)
+            triple = select.select([self.sock], [], [], self.maxerrorwait)
             if len(triple[0]) == 0:
                 continue
             buf = self.sock.recv()
@@ -405,7 +405,8 @@ try:
     devtok_format = cp.get('apnsd', 'device_token_format')
     apns_gateway = cp.get('apns', 'gateway')
     apns_concurrency = int(cp.get('apns', 'concurrency'))
-    apns_max_lag = int(cp.get('apns', 'max_lag'))
+    apns_max_notif_lag = int(cp.get('apns', 'max_notification_lag'))
+    apns_max_error_wait = float(cp.get('apns', 'max_error_wait'))
     feedback_gateway = cp.get('feedback', 'gateway')
     feedback_frequency = int(cp.get('feedback', 'frequency'))
 except ConfigParser.Error as e:
@@ -480,7 +481,7 @@ logging.info("%d feedbacks retrieved from persistent storage" %
 # Start APNS threads and Feedback one.
 #
 for i in range(apns_concurrency):
-    t = APNSAgent(apnsq, apns_gateway, apns_max_lag)
+    t = APNSAgent(apnsq, apns_gateway, apns_max_notif_lag, apns_max_error_wait)
     t.start()
 
 t = FeedbackAgent(feedbackq, feedback_gateway, feedback_frequency)
