@@ -114,29 +114,30 @@ class TLSConnectionMaker:
     """
 
     # This has to be called before any object is created.
-    @classmethod
-    def configure(c, cacerts, cert, key):
+    def __init__(self, cacerts, cert, key):
         """
         Configures the CA, certificate and key files to be used when
         creating a connection.
         """
-        c.cacerts = cacerts
-        c.cert = cert
-        c.key = key
+        self.cacerts = cacerts
+        self.cert = cert
+        self.key = key
 
-    @classmethod
-    def connect(c, peer):
+    def __call__(self, peer):
         """
         Creates an SSL socket to the given `peer', which is a tuple
         (host, port).
         """
-        assert c.cacerts is not None
         ai = socket.getaddrinfo(peer[0], peer[1], 0, 0, socket.IPPROTO_TCP)
         s = socket.socket(ai[0][0], ai[0][1], ai[0][2])
-        sslsock = ssl.wrap_socket(s, keyfile=c.key, certfile=c.cert,
-            server_side=False, cert_reqs=ssl.CERT_REQUIRED, ca_certs=cacerts)
+        sslsock = ssl.wrap_socket(s, keyfile=self.key, certfile=self.cert,
+            server_side=False, cert_reqs=ssl.CERT_REQUIRED,
+            ca_certs=self.cacerts)
         sslsock.connect(ai[0][4])
         return sslsock
+
+# This will be used as a function
+tlsconnect = None
 
 
 class APNSAgent(threading.Thread):
@@ -164,7 +165,7 @@ class APNSAgent(threading.Thread):
 
     def _connect(self):
         try:
-            self.sock = TLSConnectionMaker.connect(self.gateway)
+            self.sock = tlsconnect(self.gateway)
         except Exception as e:
             logging.error("Couldn't connect to APNS (%s:%d): %s" %
                 (self.gateway[0], self.gateway[1], e))
@@ -430,12 +431,12 @@ devtokfmt = DeviceTokenFormater(devtok_format)
 #
 # Check APNS/feedback TLS connections.
 #
-TLSConnectionMaker.configure(cacerts, cert, key)
+tlsconnect = TLSConnectionMaker(cacerts, cert, key)
 logging.info("Testing APNS gateway...")
 try:
     l = apns_gateway.split(':', 2)
     apns_gateway = tuple(l)
-    s = TLSConnectionMaker.connect(apns_gateway)
+    s = tlsconnect(apns_gateway)
     s.close()
 except Exception as e:
     logging.error("%s: Cannot connect to APNS: %s" % (CONFIGFILE, e))
@@ -445,7 +446,7 @@ logging.info("Testing feedback gateway...")
 try:
     l = feedback_gateway.split(':', 2)
     feedback_gateway = tuple(l)
-    s = TLSConnectionMaker.connect(feedback_gateway)
+    s = tlsconnect(feedback_gateway)
     s.close()
 except:
     logging.error("%s: Cannot connect to feedback service: %s" %
