@@ -173,7 +173,6 @@ class APNSAgent(threading.Thread):
         self.sock.settimeout(0)
 
     def run(self):
-        lastident = None
         while True:
             ident, curtime, devtok, payload = self.queue.get()
             bintok = base64.standard_b64decode(devtok)
@@ -200,30 +199,11 @@ class APNSAgent(threading.Thread):
             # Now send it.
             if self.sock is None:
                 self._connect()
-            else:
-                # Receive a possible error in the preceeding message.
-                triple = select.select([self.sock], [], [], RESPONSEWAIT)
-                if len(triple[0]) > 0:
-                    buf = self.sock.recv()
-                    if len(buf) != struct.calcsize('>BBI'):
-                        logging.debug("Unexpected APNS error response size: %d (!= %d)" %
-                            (len(buf), struct.calcsize('>BBI')))
-                    # Bad...
-                    cmd, st, errident = struct.unpack('>BBI', buf)
-                    idmismatch = ''
-                    if lastident != errident:
-                        idmismatch = ' (identifier mismatch: #%d)' % errident
-                    logging.warning("Notification #%d to %s response: " \
-                        "%s%s" % (lastident, devtokfmt(bintok),
-                         APNSAgent._error_responses[st], idmismatch))
-                    self.sock.close()       # Yes, close abruptly.
-                    self._connect()
 
             trial = 0
             while trial < MAXTRIAL:
                 try:
                     self.sock.sendall(binmsg)
-                    lastident = ident
                     break
                 except socket.error as e:
                     trial = trial + 1
@@ -238,6 +218,25 @@ class APNSAgent(threading.Thread):
                 logging.warning("Couldn't send notification #%d to %s, "
                     "abording" % (ident, devtokfmt(bintok)))
                 continue
+
+            # Receive a possible error in the preceeding message.
+            triple = select.select([self.sock], [], [], RESPONSEWAIT)
+            if len(triple[0]) == 0:
+                continue
+            buf = self.sock.recv()
+            if len(buf) != struct.calcsize('>BBI'):
+                logging.debug("Unexpected APNS error response size: %d (!= %d)" %
+                    (len(buf), struct.calcsize('>BBI')))
+            # Bad...
+            cmd, st, errident = struct.unpack('>BBI', buf)
+            idmismatch = ''
+            if ident != errident:
+                idmismatch = ' (identifier mismatch: #%d)' % errident
+            logging.warning("Notification #%d to %s response: " \
+                "%s%s" % (ident, devtokfmt(bintok),
+                 APNSAgent._error_responses[st], idmismatch))
+            self.sock.close()       # Yes, close abruptly.
+            self._connect()
 
 
 class FeedbackAgent(threading.Thread):
