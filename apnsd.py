@@ -29,6 +29,7 @@ import random
 import re
 import socket
 import sqlite3
+import select
 import ssl
 import struct
 import sys
@@ -156,6 +157,7 @@ class APNSAgent(threading.Thread):
         self.sock.settimeout(0)
 
     def run(self):
+        lastident = None
         while True:
             ident, curtime, devtok, payload = self.queue.get()
             bintok = base64.standard_b64decode(devtok)
@@ -185,32 +187,28 @@ class APNSAgent(threading.Thread):
                 self._connect()
             else:
                 # Receive a possible error in the preceeding message.
-                self.sock.setblocking(0)
-                try:
+                triple = select.select([self.sock], [], [], RESPONSEWAIT)
+                if len(triple[0]) > 0:
                     buf = self.sock.recv()
                     if len(buf) != struct.calcsize('>BBI'):
                         logging.debug("Unexpected APNS error response size: %d (!= %d)" %
                             (len(buf), struct.calcsize('>BBI')))
                     # Bad...
-                    cmd, st, ident2 = struct.unpack('>BBI', buf)
+                    cmd, st, errident = struct.unpack('>BBI', buf)
                     idmismatch = ''
-                    if ident != ident2:
-                        idmismatch = ' (identifier mismatch: #%d)' % ident2
+                    if lastident != errident:
+                        idmismatch = ' (identifier mismatch: #%d)' % errident
                     logging.warning("Notification #%d to %s (%s) response: " \
-                        "%s%s" % (ident, devtok, asciitok,
+                        "%s%s" % (lastident, devtok, asciitok,
                          APNSAgent._error_responses[st], idmismatch))
                     self.sock.close()       # Yes, close abruptly.
                     self._connect()
-                except socket.timeout as e:
-                    # Good!  If APNS didn't sent anything, our message has
-                    # been accepted
-                    pass
-                self.sock.setblocking(1)
 
             trial = 0
             while trial < MAXTRIAL:
                 try:
                     self.sock.sendall(binmsg)
+                    lastident = ident
                     break
                 except socket.error as e:
                     trial = trial + 1
