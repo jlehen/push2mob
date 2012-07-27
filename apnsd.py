@@ -21,6 +21,11 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+# TODO
+# - expiry parameter
+# - return notification id in the reply through ZMQ
+# - add a record of the last notifications sent
+
 import ConfigParser
 import Queue
 import base64
@@ -175,8 +180,23 @@ class APNSAgent(threading.Thread):
         self.sock.settimeout(0)
 
     def _processerror(self):
+        """
+        Returns True if we received an error response, False if the
+        connection has just been closed remotely.
+        """
+
         assert self.lastnotification != None
         buf = self.sock.recv()
+        if len(buf) == 0:
+            # XXX It seems the socket has already been shut down by the
+            # other side but I cannot use SHUT_WR.  This is weird because
+            # the connection is supposed to be half-closed in this case
+            # so I should be able to use SHUT_WR to do the "passive close".
+            #self.sock.shutdown(socket.SHUT_RDWR)
+            self.sock.close()
+            self.sock = None
+            return False
+
         if len(buf) != struct.calcsize('>BBI'):
             logging.debug("Unexpected APNS error response size: %d (!= %d)" %
                 (len(buf), struct.calcsize('>BBI')))
@@ -188,14 +208,16 @@ class APNSAgent(threading.Thread):
         logging.warning("Notification #%d to %s response: %s%s" %
             (self.lastnotification[0], devtokfmt(self.lastnotification[1]),
              APNSAgent._error_responses[st], idmismatch))
-        self.sock.close()       # Yes, close abruptly.
-        self.sock = None
+        return True
 
     def run(self):
         while True:
             # That should be enough for APNS to return an error response
             # for the last message.
-            timeout = None if self.sock is None else 2
+            if self.sock is None:
+                timeout = None
+            else:
+                timeout = 1
             try:
                 ident, ntime, devtok, payload = self.queue.get(True, timeout)
             except Queue.Empty as e:
@@ -219,7 +241,6 @@ class APNSAgent(threading.Thread):
                 logging.info("Discarding notification #%d to %s: " \
                     "delayed by %us (max %us)" %
                     (ident, devtokfmt(bintok), lag, self.maxnotiflag))
-                time.sleep(random.randint(1, 3))    # DEVEL
                 continue
 
             # Build the binary message.
@@ -242,18 +263,11 @@ class APNSAgent(threading.Thread):
                     self.sock.sendall(binmsg)
                     break
                 except socket.error as e:
-                    # The socket may have been closed because of an error.
-                    # Check if there was an error response.
-                    triple = select.select([self.sock], [], [], 0)
-                    if len(triple[0]) != 0:
-                        self._processerror()
-
+                    self._processerror()
                     trial = trial + 1
                     logging.info("Failed attempt %d to send notification "
                         "#%d to %s: %s" %
                         (trial, ident, devtokfmt(bintok), e))
-                    self.sock.shutdown(socket.SHUT_RDWR)
-                    self.sock.close()
                     self._connect()
                     continue
             if trial == MAXTRIAL:
@@ -261,6 +275,7 @@ class APNSAgent(threading.Thread):
                     "abording" % (ident, devtokfmt(bintok)))
                 continue
             self.lastnotification = (ident, bintok, payload)
+
 
 class FeedbackAgent(threading.Thread):
 
