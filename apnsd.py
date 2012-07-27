@@ -90,6 +90,7 @@ class PersistentQueue(Queue.Queue):
             (r[0],))
         return r[1]
 
+
 class DeviceTokenFormater:
 
     def __init__(self, format):
@@ -161,6 +162,8 @@ class APNSAgent(threading.Thread):
         self.gateway = gateway
         self.maxnotiflag = maxnotiflag
         self.maxerrorwait = maxerrorwait
+        # Tuple: (id, bintok, payload)
+        self.lastnotification = None
         self.sock = None
 
     def _connect(self):
@@ -172,13 +175,47 @@ class APNSAgent(threading.Thread):
             sys.exit(3)
         self.sock.settimeout(0)
 
+    def _processerror(self):
+        assert self.lastnotification != None
+        buf = self.sock.recv()
+        if len(buf) != struct.calcsize('>BBI'):
+            logging.debug("Unexpected APNS error response size: %d (!= %d)" %
+                (len(buf), struct.calcsize('>BBI')))
+        # Bad...
+        cmd, st, errident = struct.unpack('>BBI', buf)
+        idmismatch = ''
+        if self.lastnotification[0] != errident:
+            idmismatch = ' (identifier mismatch: #%d)' % errident
+        logging.warning("Notification #%d to %s response: %s%s" %
+            (self.lastnotification[0], devtokfmt(self.lastnotification[1]),
+             APNSAgent._error_responses[st], idmismatch))
+        self.sock.close()       # Yes, close abruptly.
+        self.sock = None
+
     def run(self):
         while True:
-            ident, curtime, devtok, payload = self.queue.get()
+            # That should be enough for APNS to return an error response
+            # for the last message.
+            timeout = None if self.sock is None else 2
+            try:
+                ident, ntime, devtok, payload = self.queue.get(True, timeout)
+            except Queue.Empty as e:
+                triple = select.select([self.sock], [], [], 0)
+                if len(triple[0]) != 0:
+                    self._processerror()
+                    timeout = None
+                else:
+                    # Try to be generous with APNS and give it enough
+                    # time to return is error.
+                    timeout = timeout * 2
+                    if timeout > 10:
+                        timeout = None
+                continue
+                    
             bintok = base64.standard_b64decode(devtok)
 
             # Check notification lag.
-            lag = now() - curtime
+            lag = now() - ntime
             if lag > self.maxnotiflag:
                 logging.info("Discarding notification #%d to %s: " \
                     "delayed by %us (max %us)" %
@@ -218,25 +255,12 @@ class APNSAgent(threading.Thread):
                 logging.warning("Couldn't send notification #%d to %s, "
                     "abording" % (ident, devtokfmt(bintok)))
                 continue
+            self.lastnotification = (ident, bintok, payload)
 
             # Receive a possible error in the preceeding message.
             triple = select.select([self.sock], [], [], self.maxerrorwait)
-            if len(triple[0]) == 0:
-                continue
-            buf = self.sock.recv()
-            if len(buf) != struct.calcsize('>BBI'):
-                logging.debug("Unexpected APNS error response size: %d (!= %d)" %
-                    (len(buf), struct.calcsize('>BBI')))
-            # Bad...
-            cmd, st, errident = struct.unpack('>BBI', buf)
-            idmismatch = ''
-            if ident != errident:
-                idmismatch = ' (identifier mismatch: #%d)' % errident
-            logging.warning("Notification #%d to %s response: " \
-                "%s%s" % (ident, devtokfmt(bintok),
-                 APNSAgent._error_responses[st], idmismatch))
-            self.sock.close()       # Yes, close abruptly.
-            self._connect()
+            if len(triple[0]) != 0:
+                self._processerror()
 
 
 class FeedbackAgent(threading.Thread):
