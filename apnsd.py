@@ -155,13 +155,12 @@ class APNSAgent(threading.Thread):
         255: "None (unknown)"
     }
 
-    def __init__(self, queue, gateway, maxnotiflag, maxerrorwait):
+    def __init__(self, queue, gateway, maxnotiflag):
         threading.Thread.__init__(self)
         self.daemon = True
         self.queue = queue
         self.gateway = gateway
         self.maxnotiflag = maxnotiflag
-        self.maxerrorwait = maxerrorwait
         # Tuple: (id, bintok, payload)
         self.lastnotification = None
         self.sock = None
@@ -243,6 +242,12 @@ class APNSAgent(threading.Thread):
                     self.sock.sendall(binmsg)
                     break
                 except socket.error as e:
+                    # The socket may have been closed because of an error.
+                    # Check if there was an error response.
+                    triple = select.select([self.sock], [], [], 0)
+                    if len(triple[0]) != 0:
+                        self._processerror()
+
                     trial = trial + 1
                     logging.info("Failed attempt %d to send notification "
                         "#%d to %s: %s" %
@@ -256,12 +261,6 @@ class APNSAgent(threading.Thread):
                     "abording" % (ident, devtokfmt(bintok)))
                 continue
             self.lastnotification = (ident, bintok, payload)
-
-            # Receive a possible error in the preceeding message.
-            triple = select.select([self.sock], [], [], self.maxerrorwait)
-            if len(triple[0]) != 0:
-                self._processerror()
-
 
 class FeedbackAgent(threading.Thread):
 
@@ -430,7 +429,6 @@ try:
     apns_gateway = cp.get('apns', 'gateway')
     apns_concurrency = int(cp.get('apns', 'concurrency'))
     apns_max_notif_lag = int(cp.get('apns', 'max_notification_lag'))
-    apns_max_error_wait = float(cp.get('apns', 'max_error_wait'))
     feedback_gateway = cp.get('feedback', 'gateway')
     feedback_frequency = int(cp.get('feedback', 'frequency'))
 except ConfigParser.Error as e:
@@ -505,7 +503,7 @@ logging.info("%d feedbacks retrieved from persistent storage" %
 # Start APNS threads and Feedback one.
 #
 for i in range(apns_concurrency):
-    t = APNSAgent(apnsq, apns_gateway, apns_max_notif_lag, apns_max_error_wait)
+    t = APNSAgent(apnsq, apns_gateway, apns_max_notif_lag)
     t.start()
 
 t = FeedbackAgent(feedbackq, feedback_gateway, feedback_frequency)
