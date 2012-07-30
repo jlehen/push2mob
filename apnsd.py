@@ -300,6 +300,7 @@ class FeedbackAgent(threading.Thread):
 class Listener(threading.Thread):
 
     whtsp = re.compile("\s+")
+    num = re.compile("^\d+$")
 
     def __init__(self, sqlitedb, zmqsock, apnsq, feedbackq):
         threading.Thread.__init__(self)
@@ -324,7 +325,7 @@ class Listener(threading.Thread):
             l = re.split(Listener.whtsp, l[1], ntok)
             devtoks = l[0:ntok]
             payload = l[ntok]
-        except IndexError as e:
+        except Exception as e:
             self._error("Invalid input", msg)
             return None
 
@@ -400,10 +401,12 @@ class Listener(threading.Thread):
                 #
                 # Enqueue notifications.
                 curtime = now()
+                ids = []
                 for devtok in devtoks:
                     self.apnsq.put((curid, curtime, devtok, payload))
+                    ids.append(str(curid))
                     curid = curid + 1
-                self.zmqsock.send("OK I'll promise I'll do my best!")
+                self.zmqsock.send("OK %s" % ' '.join(ids))
                 continue
 
             elif msg.lower().find("feedback") == 0:
@@ -415,10 +418,9 @@ class Listener(threading.Thread):
                 except Queue.Empty:
                         pass
                 if len(feedbacks) == 0:
-                    self.zmqsock.send("OK 0")
+                    self.zmqsock.send("OK")
                 else:
-                    self.zmqsock.send("OK " + str(len(feedbacks)) + " " +
-                        ' '.join(feedbacks))
+                    self.zmqsock.send("OK "+ ' '.join(feedbacks))
                 continue
 
             self._error("Invalid input", msg)
