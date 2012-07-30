@@ -222,7 +222,8 @@ class APNSAgent(threading.Thread):
             else:
                 timeout = 1
             try:
-                ident, ntime, devtok, payload = self.queue.get(True, timeout)
+                ident, creation, expiry, devtok, payload = \
+                    self.queue.get(True, timeout)
             except Queue.Empty as e:
                 triple = select.select([self.sock], [], [], 0)
                 if len(triple[0]) != 0:
@@ -239,7 +240,7 @@ class APNSAgent(threading.Thread):
             bintok = base64.standard_b64decode(devtok)
 
             # Check notification lag.
-            lag = now() - ntime
+            lag = now() - creation
             if lag > self.maxnotiflag:
                 logging.info("Discarding notification #%d to %s: " \
                     "delayed by %us (max %us)" %
@@ -252,7 +253,7 @@ class APNSAgent(threading.Thread):
                 (ident, devtokfmt(bintok), lag, payload))
             fmt = '> B II' + 'H' + str(len(bintok)) + 's' + \
                 'H' + str(len(payload)) + 's'
-            binmsg = struct.pack(fmt, 1, ident, now(), len(bintok), bintok,
+            binmsg = struct.pack(fmt, 1, ident, expiry, len(bintok), bintok,
                 len(payload), payload)
             hexdump(binmsg)
             
@@ -329,9 +330,10 @@ class Listener(threading.Thread):
     def _parse_send(self, msg):
         cmdargs = msg[5:]
         try:
-            l = re.split(Listener.whtsp, cmdargs, 1)
-            ntok = int(l[0])
-            l = re.split(Listener.whtsp, l[1], ntok)
+            l = re.split(Listener.whtsp, cmdargs, 2)
+            expiry = int(l[0])
+            ntok = int(l[1])
+            l = re.split(Listener.whtsp, l[2], ntok)
             devtoks = l[0:ntok]
             payload = l[ntok]
         except Exception as e:
@@ -377,7 +379,7 @@ class Listener(threading.Thread):
                 PAYLOADMAXLEN, payload)
             return None
 
-        return (devtoks, payload)
+        return (expiry, devtoks, payload)
 
     def run(self):
 
@@ -404,15 +406,14 @@ class Listener(threading.Thread):
                 res = self._parse_send(msg)
                 if res == None:
                     continue
-                devtoks, payload = res
+                expiry, devtoks, payload = res
                 sqlcur.execute('UPDATE ident SET cur=?',
                     (curid + len(devtoks), ))
                 #
                 # Enqueue notifications.
-                curtime = now()
                 ids = []
                 for devtok in devtoks:
-                    self.apnsq.put((curid, curtime, devtok, payload))
+                    self.apnsq.put((curid, now(), expiry, devtok, payload))
                     ids.append(str(curid))
                     curid = curid + 1
                 self.zmqsock.send("OK %s" % ' '.join(ids))

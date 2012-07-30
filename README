@@ -23,13 +23,19 @@ tokens.
 Syntax in BNF:
 
   command = ( send | "feedback" )
-  send = "send" number devicetokens payload
+  send = "send" expiry number devicetokens payload
   devicetokens = ( devicetoken_hex | devicetoken_base64 ) [ devicetokens ]
 
-The ``number'' in the ``send'' command is the number of following device
-tokens.  Device tokens may be specified in hexadecimal or base64.  The
-``payload'' must not be larger than 256 bytes.  This is a limit enforced
-by APNS.
+- The ``expiry'' is a UNIX epoch date in seconds until which the
+  notification staus valid, that is how long APNS will try to deliver
+  the notification (a value in the past will make APNS try only once
+  before discarding it).
+  Note that the notification may be enqueued for a few seconds in apnsd
+  before being send to APNS.
+- The ``number'' is the number of following device tokens.  Device tokens
+  may be specified in hexadecimal or base64.
+- The ``payload'' must not be larger than 256 bytes.  This is a limit
+  enforced by APNS.
 
 2. Replies
 
