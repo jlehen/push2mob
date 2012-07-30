@@ -21,10 +21,6 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-# TODO
-# - expiry parameter
-# - add a record of the last notifications sent
-
 import ConfigParser
 import Queue
 import base64
@@ -144,6 +140,43 @@ class TLSConnectionMaker:
 tlsconnect = None
 
 
+class RecentNotifications(threading.Thread):
+    """
+    Each instance of this class goes with one APNSAgent instance.
+    It records notifications that have been recently sent by this
+    agent.
+    """
+
+    def __init__(self, maxerrorwait):
+        threading.Thread.__init__(self)
+        if maxerrorwait != 0:
+            # For an error wait of 0.1 seconds, this
+            # will rotate the dicts every minute.
+            self.swtime = 600 * maxerrorwait
+        else:
+            self.swtime = 10
+        self.n = [{}, {}]
+        self.i = 0
+
+    def run(self):
+        while True:
+            time.sleep(self.swtime)
+            j = (self.i + 1) % 2
+            self.n[j] = {}
+            self.i = j
+
+    def record(self, ident, notification):
+        self.n[self.i][ident] = notification
+
+    def lookup(self, ident):
+        i0 = self.i
+        i1 = (i + 1) % 2
+        n = self.n[i0].get(ident)
+        if n is None:
+            n = self.n[i1].get(ident)
+        return n
+
+
 class APNSAgent(threading.Thread):
 
     _error_responses = {
@@ -166,8 +199,8 @@ class APNSAgent(threading.Thread):
         self.gateway = gateway
         self.maxnotiflag = maxnotiflag
         self.maxerrorwait = maxerrorwait
-        # Tuple: (id, bintok, payload)
-        self.lastnotification = None
+        # Tuple: (id, bintok)
+        self.recentnotifications = RecentNotifications(maxerrorwait)
         self.sock = None
 
     def _connect(self):
@@ -194,7 +227,6 @@ class APNSAgent(threading.Thread):
         connection has just been closed remotely.
         """
 
-        assert self.lastnotification != None
         buf = self.sock.recv()
         if len(buf) == 0:
             logging.debug("APNS closed the connection")
@@ -206,12 +238,13 @@ class APNSAgent(threading.Thread):
                 (len(buf), struct.calcsize('>BBI')))
         # Bad...
         cmd, st, errident = struct.unpack('>BBI', buf)
-        idmismatch = ''
-        if self.lastnotification[0] != errident:
-            idmismatch = ' (identifier mismatch: #%d)' % errident
-        logging.warning("Notification #%d to %s response: %s%s" %
-            (self.lastnotification[0], devtokfmt(self.lastnotification[1]),
-             APNSAgent._error_responses[st], idmismatch))
+        errdevtok = self.recentnotifications.lookup(errident)
+        if errdevtok is None:
+            errdevtok = "unknown"
+        else:
+            errdevtok = devtokfmt(errdevtok)
+        logging.warning("Notification #%d to %s response: %s" %
+            (errident, errdevtok, APNSAgent._error_responses[st]))
         self._close()
         return True
 
@@ -269,16 +302,17 @@ class APNSAgent(threading.Thread):
                 except socket.error as e:
                     self._processerror()
                     trial = trial + 1
-                    logging.info("Failed attempt %d to send notification "
+                    logging.info("Retry (%d) to send notification "
                         "#%d to %s: %s" %
                         (trial, ident, devtokfmt(bintok), e))
                     self._connect()
                     continue
             if trial == MAXTRIAL:
-                logging.warning("Couldn't send notification #%d to %s, "
+                logging.warning("Cannot send notification #%d to %s, "
                     "abording" % (ident, devtokfmt(bintok)))
                 continue
-            self.lastnotification = (ident, bintok, payload)
+            self.recentnotifications.record(ident, bintok)
+            logging.debug("Notification #%d sent", ident)
 
             if self.maxerrorwait != 0:
                 # Receive a possible error in the preceeding message.
