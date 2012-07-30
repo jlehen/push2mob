@@ -23,7 +23,6 @@
 
 # TODO
 # - expiry parameter
-# - return notification id in the reply through ZMQ
 # - add a record of the last notifications sent
 
 import ConfigParser
@@ -160,12 +159,13 @@ class APNSAgent(threading.Thread):
         255: "None (unknown)"
     }
 
-    def __init__(self, queue, gateway, maxnotiflag):
+    def __init__(self, queue, gateway, maxnotiflag, maxerrorwait):
         threading.Thread.__init__(self)
         self.daemon = True
         self.queue = queue
         self.gateway = gateway
         self.maxnotiflag = maxnotiflag
+        self.maxerrorwait = maxerrorwait
         # Tuple: (id, bintok, payload)
         self.lastnotification = None
         self.sock = None
@@ -179,6 +179,15 @@ class APNSAgent(threading.Thread):
             sys.exit(3)
         self.sock.settimeout(0)
 
+    def _close(self):
+        # XXX It seems the socket has already been shut down by the
+        # other side but I cannot use SHUT_WR.  This is weird because
+        # the connection is supposed to be half-closed in this case
+        # so I should be able to use SHUT_WR to do the "passive close".
+        #self.sock.shutdown(socket.SHUT_RDWR)
+        self.sock.close()
+        self.sock = None
+
     def _processerror(self):
         """
         Returns True if we received an error response, False if the
@@ -188,13 +197,8 @@ class APNSAgent(threading.Thread):
         assert self.lastnotification != None
         buf = self.sock.recv()
         if len(buf) == 0:
-            # XXX It seems the socket has already been shut down by the
-            # other side but I cannot use SHUT_WR.  This is weird because
-            # the connection is supposed to be half-closed in this case
-            # so I should be able to use SHUT_WR to do the "passive close".
-            #self.sock.shutdown(socket.SHUT_RDWR)
-            self.sock.close()
-            self.sock = None
+            logging.debug("APNS closed the connection")
+            self._close()
             return False
 
         if len(buf) != struct.calcsize('>BBI'):
@@ -208,12 +212,11 @@ class APNSAgent(threading.Thread):
         logging.warning("Notification #%d to %s response: %s%s" %
             (self.lastnotification[0], devtokfmt(self.lastnotification[1]),
              APNSAgent._error_responses[st], idmismatch))
+        self._close()
         return True
 
     def run(self):
         while True:
-            # That should be enough for APNS to return an error response
-            # for the last message.
             if self.sock is None:
                 timeout = None
             else:
@@ -275,6 +278,12 @@ class APNSAgent(threading.Thread):
                     "abording" % (ident, devtokfmt(bintok)))
                 continue
             self.lastnotification = (ident, bintok, payload)
+
+            if self.maxerrorwait != 0:
+                # Receive a possible error in the preceeding message.
+                triple = select.select([self.sock], [], [], self.maxerrorwait)
+                if len(triple[0]) != 0:
+                    self._processerror()
 
 
 class FeedbackAgent(threading.Thread):
@@ -446,6 +455,7 @@ try:
     apns_gateway = cp.get('apns', 'gateway')
     apns_concurrency = int(cp.get('apns', 'concurrency'))
     apns_max_notif_lag = int(cp.get('apns', 'max_notification_lag'))
+    apns_max_error_wait = float(cp.get('apns', 'max_error_wait'))
     feedback_gateway = cp.get('feedback', 'gateway')
     feedback_frequency = int(cp.get('feedback', 'frequency'))
 except ConfigParser.Error as e:
@@ -520,7 +530,7 @@ logging.info("%d feedbacks retrieved from persistent storage" %
 # Start APNS threads and Feedback one.
 #
 for i in range(apns_concurrency):
-    t = APNSAgent(apnsq, apns_gateway, apns_max_notif_lag)
+    t = APNSAgent(apnsq, apns_gateway, apns_max_notif_lag, apns_max_error_wait)
     t.start()
 
 t = FeedbackAgent(feedbackq, feedback_gateway, feedback_frequency)
