@@ -211,7 +211,7 @@ class APNSAgent(threading.Thread):
             logging.error("Couldn't connect to APNS (%s:%d): %s" %
                 (self.gateway[0], self.gateway[1], e))
             sys.exit(3)
-        self.sock.settimeout(0)
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
 
     def _close(self):
         # XXX It seems the socket has already been shut down by the
