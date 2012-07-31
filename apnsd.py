@@ -326,7 +326,7 @@ class APNSAgent(threading.Thread):
 
 class FeedbackAgent(threading.Thread):
 
-    def __init__(self, sock, queue, gateway, frequency):
+    def __init__(self, queue, sock, gateway, frequency):
         threading.Thread.__init__(self)
         self.daemon = True
         self.sock = sock
@@ -339,11 +339,11 @@ class FeedbackAgent(threading.Thread):
         self.tuplesize = struct.calcsize(self.fmt)
 
     def _shapesocket(self):
-        self.sock.shutdown(SHUT_WR)
+        self.sock.shutdown(socket.SHUT_WR)
         self.sock.setblocking(0)
 
     def _close(self):
-        self.sock.shudown(SHUT_RD)
+        self.sock.shutdown(socket.SHUT_RD)
         self.sock.close()
         self.sock = None
 
@@ -365,13 +365,15 @@ class FeedbackAgent(threading.Thread):
                 if len(triple[0]) == 0:
                     if len(buf) != 0:
                         logging.warning("Unexpected trailing garbage from " \
-                            "feedback service (%d bytes remaining") % len(buf))
+                            "feedback service (%d bytes remaining)" % len(buf))
+                        hexdump(buf)
                     break
 
                 b = self.sock.recv()
                 if len(b) == 0:
                     logging.warning("Unexpected empty recv() from feedback " \
-                        "service (%d bytes remaining in buffer") % len(buf))
+                        "service (%d bytes remaining in buffer)" % len(buf))
+                    hexdump(buf)
                     break
                 buf = buf + b
                 while True:
@@ -379,9 +381,11 @@ class FeedbackAgent(threading.Thread):
                         bintuple = buf[0:self.tuplesize]
                     except IndexError as e:
                         break
+                    if len(bintuple) < self.tuplesize:
+                        break
                     buf = buf[self.tuplesize:]
                     ts, toklen, bintok = struct.unpack(self.fmt, bintuple)
-                    self.queue.put((str(ts), devtokfmt(bintok)))
+                    self.queue.put((ts, devtokfmt(bintok)))
 
             self._close()
 
