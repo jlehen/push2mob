@@ -385,7 +385,10 @@ class FeedbackAgent(threading.Thread):
                         break
                     buf = buf[self.tuplesize:]
                     ts, toklen, bintok = struct.unpack(self.fmt, bintuple)
-                    self.queue.put((ts, devtokfmt(bintok)))
+                    devtok = devtokfmt(bintok)
+                    ts = str(ts)
+                    logging.info("New feedback tuple (%s, %s)" % (ts, devtok))
+                    self.queue.put((ts, devtok))
 
             self._close()
 
