@@ -334,7 +334,6 @@ class FeedbackAgent(threading.Thread):
         self.queue = queue
         self.gateway = gateway
         self.frequency = frequency
-        self.queue.put((12345678890, "ABCDEF="))
         self.fmt = '> IH ' + str(DEVTOKLEN) + 's'
         self.tuplesize = struct.calcsize(self.fmt)
 
