@@ -331,16 +331,12 @@ class FeedbackAgent(threading.Thread):
         threading.Thread.__init__(self)
         self.daemon = True
         self.sock = sock
-        self._shapesocket()
         self.queue = queue
         self.gateway = gateway
         self.frequency = frequency
         self.queue.put((12345678890, "ABCDEF="))
         self.fmt = '> IH ' + str(DEVTOKLEN) + 's'
         self.tuplesize = struct.calcsize(self.fmt)
-
-    def _shapesocket(self):
-        self.sock.setblocking(0)
 
     def _close(self):
         self.sock.shutdown(socket.SHUT_RD)
@@ -355,26 +351,17 @@ class FeedbackAgent(threading.Thread):
             if self.sock is None:
                 time.sleep(self.frequency)
                 self.sock = tlsconnect(self.gateway)
-                self._shapesocket()
 
             buf = ""
             while True:
-                # One second should be enough for the feedback service to
-                # start sending something.
-                triple = select.select([self.sock], [], [], 1)
-                if len(triple[0]) == 0:
+                b = self.sock.recv()
+                if len(b) == 0:
                     if len(buf) != 0:
                         logging.warning("Unexpected trailing garbage from " \
                             "feedback service (%d bytes remaining)" % len(buf))
                         hexdump(buf)
                     break
 
-                b = self.sock.recv()
-                if len(b) == 0:
-                    logging.warning("Unexpected empty recv() from feedback " \
-                        "service (%d bytes remaining in buffer)" % len(buf))
-                    hexdump(buf)
-                    break
                 buf = buf + b
                 while True:
                     try:
