@@ -65,17 +65,17 @@ is a timestamp in the Unix format, as provided by APNS.
 III. EXAMPLE:
 
 # Send a notification to one device, using Base64 encoded device token.
-REQ> send 1 oplo1dgXSxYT5jGmD/L3XjVSRHCT1EkMLBk+/xp5HAY= hello
+REQ> send 1343727824 1 oplo1dgXSxYT5jGmD/L3XjVSRHCT1EkMLBk+/xp5HAY= hello
 REP> OK 34
 
 # Send a notification to two devices, using hex encoded device tokens.
-REQ> send 2 DDE37D652A87B72516D51117B45980852A22CEFAB57ABF84ED11F937ED621007 7B168DB2D8F3EBAE6A0235AFF7CEDAC279ECBA6DDE83099816383E94B3B2020C hello
+REQ> send 1343728733 2 DDE37D652A87B72516D51117B45980852A22CEFAB57ABF84ED11F937ED621007 7B168DB2D8F3EBAE6A0235AFF7CEDAC279ECBA6DDE83099816383E94B3B2020C hello
 REP> OK 35 36
 
 # Send a notification using an invalid device token format.
-REQ> send 1 DEADBEAF hello
+REQ> send 1343728831 1 DEADBEAF hello
 REP> ERROR Wrong device token length (6 != 32): DEADBEAF
-REQ> send 1 oplo1dgXSxYT5jGmD/L3XjVSRHCT1EkMLBk-/xp5HAD= hello
+REQ> send 1343730023 1 oplo1dgXSxYT5jGmD/L3XjVSRHCT1EkMLBk-/xp5HAD= hello
 REP> ERROR Wrong base64 encoding for device token: oplo1dgXSxYT5jGmD/L3XjVSRHCT1EkMLBk-/xp5HAD=
 
 # Feedback containing one erronenous device token.
