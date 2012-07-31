@@ -233,11 +233,14 @@ class APNSAgent(threading.Thread):
             self._close()
             return False
 
-        if len(buf) != struct.calcsize('>BBI'):
-            logging.debug("Unexpected APNS error response size: %d (!= %d)" %
-                (len(buf), struct.calcsize('>BBI')))
+        fmt = '>BBI'
+        if len(buf) != struct.calcsize(fmt):
+            logging.warning("Unexpected APNS error response size: %d (!= %d)" %
+                (len(buf), struct.calcsize(fmt)))
+            self._close()
+            return True
         # Bad...
-        cmd, st, errident = struct.unpack('>BBI', buf)
+        cmd, st, errident = struct.unpack(fmt, buf)
         errdevtok = self.recentnotifications.lookup(errident)
         if errdevtok is None:
             errdevtok = "unknown"
