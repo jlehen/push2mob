@@ -305,7 +305,7 @@ class APNSAgent(threading.Thread):
                 except socket.error as e:
                     self._processerror()
                     trial = trial + 1
-                    logging.info("Retry (%d) to send notification "
+                    logging.debug("Retry (%d) to send notification "
                         "#%d to %s: %s" %
                         (trial, ident, devtokfmt(bintok), e))
                     self._connect()
@@ -315,7 +315,7 @@ class APNSAgent(threading.Thread):
                     "abording" % (ident, devtokfmt(bintok)))
                 continue
             self.recentnotifications.record(ident, bintok)
-            logging.debug("Notification #%d sent", ident)
+            logging.info("Notification #%d sent", ident)
 
             if self.maxerrorwait != 0:
                 # Receive a possible error in the preceeding message.
