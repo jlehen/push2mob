@@ -339,7 +339,6 @@ class FeedbackAgent(threading.Thread):
         self.tuplesize = struct.calcsize(self.fmt)
 
     def _shapesocket(self):
-        self.sock.shutdown(socket.SHUT_WR)
         self.sock.setblocking(0)
 
     def _close(self):
