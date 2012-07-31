@@ -37,6 +37,7 @@ import threading
 import time
 import zmq
 
+EXTENDEDNOTIFICATION = 1
 DEVTOKLEN = 32
 PAYLOADMAXLEN = 256
 MAXTRIAL = 2
@@ -289,8 +290,8 @@ class APNSAgent(threading.Thread):
                 (ident, devtokfmt(bintok), lag, payload))
             fmt = '> B II' + 'H' + str(len(bintok)) + 's' + \
                 'H' + str(len(payload)) + 's'
-            binmsg = struct.pack(fmt, 1, ident, expiry, len(bintok), bintok,
-                len(payload), payload)
+            binmsg = struct.pack(fmt, EXTENDEDNOTIFICATION, ident, expiry,
+                len(bintok), bintok, len(payload), payload)
             hexdump(binmsg)
             
             # Now send it.
