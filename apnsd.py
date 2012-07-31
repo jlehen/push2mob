@@ -323,22 +323,64 @@ class APNSAgent(threading.Thread):
 
 class FeedbackAgent(threading.Thread):
 
-    def __init__(self, queue, gateway, frequency):
+    def __init__(self, sock, queue, gateway, frequency):
         threading.Thread.__init__(self)
         self.daemon = True
+        self.sock = sock
+        self._shapesocket()
         self.queue = queue
         self.gateway = gateway
         self.frequency = frequency
         self.queue.put((12345678890, "ABCDEF="))
+        self.fmt = '> IH ' + str(DEVTOKLEN) + 's'
+        self.tuplesize = struct.calcsize(self.fmt)
+
+    def _shapesocket(self):
+        self.sock.shutdown(SHUT_WR)
+        self.sock.setblocking(0)
+
+    def _close(self):
+        self.sock.shudown(SHUT_RD)
+        self.sock.close()
+        self.sock = None
 
     def run(self):
-        # open socket in non-blocking mode
         while True:
-            # while read buf
-            #   break if EAGAIN
-            #   (time, toklen, devtok) = struct.unpack("> I H 32s", but)
-            #   self.queue.put((str(time), devtokfmt.format(devtok)))
-            time.sleep(self.frequency)
+            # self.sock is not None on the first run because we
+            # inherits the socket from the main thread (which has
+            # been used for testing purpose).
+            if self.sock is None:
+                time.sleep(self.frequency)
+                self.sock = tlsconnect(self.gateway)
+                self._shapesocket()
+
+            buf = ""
+            while True:
+                # One second should be enough for the feedback service to
+                # start sending something.
+                triple = select.select([self.sock], [], [], 1)
+                if len(triple[0]) == 0:
+                    if len(buf) != 0:
+                        logging.warning("Unexpected trailing garbage from " \
+                            "feedback service (%d bytes remaining") % len(buf))
+                    break
+
+                b = self.sock.recv()
+                if len(b) == 0:
+                    logging.warning("Unexpected empty recv() from feedback " \
+                        "service (%d bytes remaining in buffer") % len(buf))
+                    break
+                buf = buf + b
+                while True:
+                    try:
+                        bintuple = buf[0:self.tuplesize]
+                    except IndexError as e:
+                        break
+                    buf = buf[self.tuplesize:]
+                    ts, toklen, bintok = struct.unpack(self.fmt, bintuple)
+                    self.queue.put((str(ts), devtokfmt(bintok)))
+
+            self._close()
 
 
 class Listener(threading.Thread):
@@ -492,7 +534,7 @@ try:
     apns_max_notif_lag = int(cp.get('apns', 'max_notification_lag'))
     apns_max_error_wait = float(cp.get('apns', 'max_error_wait'))
     feedback_gateway = cp.get('feedback', 'gateway')
-    feedback_frequency = int(cp.get('feedback', 'frequency'))
+    feedback_freq = int(cp.get('feedback', 'frequency'))
 except ConfigParser.Error as e:
     logging.error("%s: %s" % (CONFIGFILE, e))
     sys.exit(1)
@@ -530,8 +572,9 @@ logging.info("Testing feedback gateway...")
 try:
     l = feedback_gateway.split(':', 2)
     feedback_gateway = tuple(l)
-    s = tlsconnect(feedback_gateway)
-    s.close()
+    feedback_sock = tlsconnect(feedback_gateway)
+    # Do not close it because the feedback service immediately sends
+    # something that we don't want to loose.
 except:
     logging.error("%s: Cannot connect to feedback service: %s" %
         (CONFIGFILE, e))
@@ -568,7 +611,7 @@ for i in range(apns_concurrency):
     t = APNSAgent(apnsq, apns_gateway, apns_max_notif_lag, apns_max_error_wait)
     t.start()
 
-t = FeedbackAgent(feedbackq, feedback_gateway, feedback_frequency)
+t = FeedbackAgent(feedbackq, feedback_sock, feedback_gateway, feedback_freq)
 t.start()
 
 #
