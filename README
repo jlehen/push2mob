@@ -114,6 +114,18 @@ and download "entrust_2048_ca.cer".  This is the same file as above.
 
 V. DESIGN
 
-To be done: Explain:
-- Threads
-- Persistent queues using SQLite
+The main thread listens on a REP/REQ (ping/pong) ZeroMQ socket for user
+commands.  Depending on the configuration file, there are 1 to N threads
+connected to the APNS for sending notifications.  There is also one thread
+dedicated to the feedback service.
+
+A PersistentQueue class derives the Python's synchronized Queue class but
+with a persistent SQLite backend.
+
+Each notification requested by the user through the ZeroMQ socket is
+enqueued to the persistent queue of notifications, from which notification
+threads retrieve it and relay it to APNS.
+
+The feedback thread periodically connects to the Apple feedback service and
+enqueues each message to a persistent queue, which is polled when the user
+uses the feedback command through the ZeroMQ socket.
