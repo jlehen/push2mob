@@ -24,6 +24,7 @@
 import ConfigParser
 import Queue
 import base64
+import getopt
 import logging
 import os
 import random
@@ -42,6 +43,13 @@ EXTENDEDNOTIFICATION = 1
 DEVTOKLEN = 32
 PAYLOADMAXLEN = 256
 MAXTRIAL = 2
+CONFIGFILE = 'apnsd.conf'
+
+def usage():
+    print """Usage: apnsd.py [options]
+Options:
+  -c    Change configuration file (defaults to "./apnsd.conf")
+  -h    Show this help message"""
 
 def now():
 
@@ -508,10 +516,32 @@ class Listener(threading.Thread):
 
             self._error("Invalid input", msg)
 
+
+#
+# Main.
+#
+
+try:
+    opts, args = getopt.getopt(sys.argv[1:], "c:h")
+except getopt.GetoptError as e:
+    if len(e.opt) == 0:
+        logging.error("%s" % e.msg)
+    else:
+        logging.error("%s: %s" % (e.msg, e.opt))
+    sys.exit(1)
+
+for o, a in opts:
+    if o == "-c":
+        CONFIGFILE = a
+    elif o == "-h":
+        usage()
+        sys.exit(0)
+    else:
+        assert False, "Unhandled option: %s" % o
+
 #
 # Get configuration.
 #
-CONFIGFILE = 'apnsd.conf'
 
 cp = ConfigParser.SafeConfigParser()
 l = cp.read([CONFIGFILE])
