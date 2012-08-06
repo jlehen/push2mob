@@ -25,6 +25,7 @@ import ConfigParser
 import Queue
 import base64
 import logging
+import os
 import random
 import re
 import socket
@@ -520,7 +521,7 @@ if len(l) == 0:
 try:
     zmq_bind = cp.get('apnsd', 'zmq_bind')
     sqlitedb = cp.get('apnsd', 'sqlite_db')
-    logfile = cp.get('apnsd', 'log_file')
+    logfile = cp.get('apnsd', 'daemon_log_file')
     cacerts = cp.get('apnsd', 'cacerts_file')
     cert = cp.get('apnsd', 'cert_file')
     key = cp.get('apnsd', 'key_file')
@@ -599,6 +600,19 @@ logging.info("%d notifications retrieved from persistent storage" %
     apnsq.qsize())
 logging.info("%d feedbacks retrieved from persistent storage" %
     feedbackq.qsize())
+
+#
+# Daemonize.
+#
+if len(logfile) != 0:
+    try:
+        pid = os.fork()
+    except OSError as e:
+        logging.error("Cannot fork: %s" % e)
+        sys.exit(2)
+    if pid != 0:
+        os._exit(0)
+    os.setsid()
 
 #
 # Start APNS threads and Feedback one.
