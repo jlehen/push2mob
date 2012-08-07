@@ -188,6 +188,7 @@ class APNSAgent(threading.Thread):
 
     _EXTENDEDNOTIFICATION = 1
     _MAXTRIAL = 2
+    _INVALIDTOKENSTATUS = 8
 
     _error_responses = {
         0: "No error encourtered",
@@ -202,13 +203,14 @@ class APNSAgent(threading.Thread):
         255: "None (unknown)"
     }
 
-    def __init__(self, queue, gateway, maxnotiflag, maxerrorwait):
+    def __init__(self, queue, gateway, maxnotiflag, maxerrorwait, feedbackq):
         threading.Thread.__init__(self)
         self.daemon = True
         self.queue = queue
         self.gateway = gateway
         self.maxnotiflag = maxnotiflag
         self.maxerrorwait = maxerrorwait
+        self.feedbackq = feedbackq
         # Tuple: (id, bintok)
         self.recentnotifications = RecentNotifications(maxerrorwait)
         self.sock = None
@@ -255,6 +257,8 @@ class APNSAgent(threading.Thread):
             errdevtok = devtokfmt(errdevtok)
         logging.warning("Notification #%d to %s response: %s" %
             (errident, errdevtok, APNSAgent._error_responses[st]))
+        if st == APNSAgent._INVALIDTOKENSTATUS:
+            self.feedbackq.put((0, errdevtok))
         return True
 
     def _processerror(self):
@@ -654,7 +658,8 @@ if len(logfile) != 0:
 # Start APNS threads and Feedback one.
 #
 for i in range(apns_concurrency):
-    t = APNSAgent(apnsq, apns_gateway, apns_max_notif_lag, apns_max_error_wait)
+    t = APNSAgent(apnsq, apns_gateway, apns_max_notif_lag, apns_max_error_wait,
+        feedbackq)
     t.start()
 
 t = FeedbackAgent(feedbackq, feedback_sock, feedback_gateway, feedback_freq)

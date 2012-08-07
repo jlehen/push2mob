@@ -58,8 +58,16 @@ elements.  BNF syntax:
   ok = "OK" [feedbacktokens]
   feedbacktokens = timestamp":"devicetoken [feedbacktokens]
 
-The ``number'' is the number of following feedback tokens.  The ``timestamp''
-is a timestamp in the Unix format, as provided by APNS.
+- The ``number'' is the number of following feedback tokens.
+- The ``timestamp'' is a timestamp in the Unix format, provided by APNS,
+  indicating when the APNS determined that the application no longer
+  exists on the device.
+  You should use the timestamp to determine if the application on the
+  device re-registered with your service since the moment the device token
+  was recorded on the feedback service. If it hasn.t, you should cease
+  sending push notifications to the device.
+  If the timestamp is 0, this means that the APNS thinks it is an invalid
+  token.
 
 
 III. EXAMPLE:
