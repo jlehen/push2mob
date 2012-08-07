@@ -402,6 +402,7 @@ class Listener(threading.Thread):
 
     _PAYLOADMAXLEN = 256
     _WHTSP = re.compile("\s+")
+    _PLUS = re.compile(r"^\+")
 
     def __init__(self, sqlitedb, zmqsock, apnsq, feedbackq):
         threading.Thread.__init__(self)
@@ -421,14 +422,17 @@ class Listener(threading.Thread):
     def _parse_send(self, msg):
         cmdargs = msg[5:]
         try:
-            l = re.split(Listener._WHTSP, cmdargs, 2)
-            expiry = int(l[0])
-            ntok = int(l[1])
-            l = re.split(Listener._WHTSP, l[2], ntok)
+            expiry, ntok, cmdargs = re.split(Listener._WHTSP, cmdargs, 2)
+            expiry, nsub = re.subn(Listener._PLUS, "", expiry, 1)
+            expiry = int(expiry)
+            if nsub == 1:
+                expiry = now() + expiry
+            ntok = int(ntok)
+            l = re.split(Listener._WHTSP, cmdargs, ntok)
             devtoks = l[0:ntok]
             payload = l[ntok]
         except Exception as e:
-            self._error("Invalid input", msg)
+            self._error("Invalid input (%s)" % e , msg)
             return None
 
         goodtoks = []
@@ -458,8 +462,9 @@ class Listener(threading.Thread):
                 continue
             # Store the token in base64 in the queue, text is better
             # to debug.
-            logging.debug("Got notification for device token %s" % \
-                base64.standard_b64encode(devtok))
+            logging.debug("Got notification for device token %s, " \
+                "expiring at %d" % (base64.standard_b64encode(devtok),
+                expiry))
             goodtoks.append(base64.standard_b64encode(devtok))
         devtoks = goodtoks
         if wrongtok:

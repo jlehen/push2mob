@@ -30,6 +30,8 @@ Syntax in BNF:
   notification staus valid, that is how long APNS will try to deliver
   the notification (a value in the past will make APNS try only once
   before discarding it).
+  If the expiry is prefixed with a '+' character, the following number is
+  added to the current UNIX time to compute the expiry date.
   Note that the notification may be enqueued for a few seconds in apnsd
   before being send to APNS.
 - The ``number'' is the number of following device tokens.  Device tokens
