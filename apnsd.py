@@ -231,28 +231,20 @@ class APNSAgent(threading.Thread):
         self.sock.close()
         self.sock = None
 
-    def _processerror(self):
-        """
-        Returns True if we received an error response, False if the
-        connection has just been closed remotely.
-        """
-
+    def _reallyprocesserror(self):
         try:
             buf = self.sock.recv()
         except socket.error as e:
             logging.debug("Connection has been shut down abruptly: %s" % e)
-            self._close()
             return False
         if len(buf) == 0:
             logging.debug("APNS closed the connection")
-            self._close()
             return False
 
         fmt = '>BBI'
         if len(buf) != struct.calcsize(fmt):
             logging.warning("Unexpected APNS error response size: %d (!= %d)" %
                 (len(buf), struct.calcsize(fmt)))
-            self._close()
             return True
         # Bad...
         cmd, st, errident = struct.unpack(fmt, buf)
@@ -263,8 +255,17 @@ class APNSAgent(threading.Thread):
             errdevtok = devtokfmt(errdevtok)
         logging.warning("Notification #%d to %s response: %s" %
             (errident, errdevtok, APNSAgent._error_responses[st]))
-        self._close()
         return True
+
+    def _doprocesserror(self):
+        """
+        Returns True if we received an error response, False if the
+        connection has just been closed remotely.
+        """
+
+        r = self._reallyprocesserror()
+        self._close()
+        return r
 
     def run(self):
         while True:
