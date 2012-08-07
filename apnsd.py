@@ -237,7 +237,12 @@ class APNSAgent(threading.Thread):
         connection has just been closed remotely.
         """
 
-        buf = self.sock.recv()
+        try:
+            buf = self.sock.recv()
+        except socket.error as e:
+            logging.debug("Connection has been shut down abruptly: %s" % e)
+            self._close()
+            return False
         if len(buf) == 0:
             logging.debug("APNS closed the connection")
             self._close()
