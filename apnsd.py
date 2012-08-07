@@ -257,7 +257,7 @@ class APNSAgent(threading.Thread):
             (errident, errdevtok, APNSAgent._error_responses[st]))
         return True
 
-    def _doprocesserror(self):
+    def _processerror(self):
         """
         Returns True if we received an error response, False if the
         connection has just been closed remotely.
