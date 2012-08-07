@@ -39,10 +39,7 @@ import threading
 import time
 import zmq
 
-EXTENDEDNOTIFICATION = 1
 DEVTOKLEN = 32
-PAYLOADMAXLEN = 256
-MAXTRIAL = 2
 CONFIGFILE = 'apnsd.conf'
 
 def usage():
@@ -189,6 +186,9 @@ class RecentNotifications(threading.Thread):
 
 class APNSAgent(threading.Thread):
 
+    _EXTENDEDNOTIFICATION = 1
+    _MAXTRIAL = 2
+
     _error_responses = {
         0: "No error encourtered",
         1: "Processing error",
@@ -305,8 +305,8 @@ class APNSAgent(threading.Thread):
                 (ident, devtokfmt(bintok), lag, payload))
             fmt = '> B II' + 'H' + str(len(bintok)) + 's' + \
                 'H' + str(len(payload)) + 's'
-            binmsg = struct.pack(fmt, EXTENDEDNOTIFICATION, ident, expiry,
-                len(bintok), bintok, len(payload), payload)
+            binmsg = struct.pack(fmt, APNSAgent._EXTENDEDNOTIFICATION, ident,
+                expiry, len(bintok), bintok, len(payload), payload)
             hexdump(binmsg)
             
             # Now send it.
@@ -314,7 +314,7 @@ class APNSAgent(threading.Thread):
                 self._connect()
 
             trial = 0
-            while trial < MAXTRIAL:
+            while trial < APNSAgent._MAXTRIAL:
                 try:
                     self.sock.sendall(binmsg)
                     break
@@ -326,7 +326,7 @@ class APNSAgent(threading.Thread):
                         (trial, ident, devtokfmt(bintok), e))
                     self._connect()
                     continue
-            if trial == MAXTRIAL:
+            if trial == APNSAgent._MAXTRIAL:
                 logging.warning("Cannot send notification #%d to %s, "
                     "abording" % (ident, devtokfmt(bintok)))
                 continue
@@ -396,8 +396,8 @@ class FeedbackAgent(threading.Thread):
 
 class Listener(threading.Thread):
 
-    whtsp = re.compile("\s+")
-    num = re.compile("^\d+$")
+    _PAYLOADMAXLEN = 256
+    _WHTSP = re.compile("\s+")
 
     def __init__(self, sqlitedb, zmqsock, apnsq, feedbackq):
         threading.Thread.__init__(self)
@@ -417,10 +417,10 @@ class Listener(threading.Thread):
     def _parse_send(self, msg):
         cmdargs = msg[5:]
         try:
-            l = re.split(Listener.whtsp, cmdargs, 2)
+            l = re.split(Listener._WHTSP, cmdargs, 2)
             expiry = int(l[0])
             ntok = int(l[1])
-            l = re.split(Listener.whtsp, l[2], ntok)
+            l = re.split(Listener._WHTSP, l[2], ntok)
             devtoks = l[0:ntok]
             payload = l[ntok]
         except Exception as e:
@@ -461,9 +461,9 @@ class Listener(threading.Thread):
         if wrongtok:
             return None
 
-        if len(payload) > PAYLOADMAXLEN:
+        if len(payload) > Listener._PAYLOADMAXLEN:
             self._error("Payload too long (%d > %d)" % len(payload),
-                PAYLOADMAXLEN, payload)
+                Listener._PAYLOADMAXLEN, payload)
             return None
 
         return (expiry, devtoks, payload)
