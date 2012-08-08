@@ -89,8 +89,14 @@ REQ> send 1343730023 1 oplo1dgXSxYT5jGmD/L3XjVSRHCT1EkMLBk-/xp5HAD= hello
 REP> ERROR Wrong base64 encoding for device token: oplo1dgXSxYT5jGmD/L3XjVSRHCT1EkMLBk-/xp5HAD=
 
 # Feedback containing one erronenous device token.
+# (apnsd configured to print device tokens as hex.)
 REQ> feedback
-REP> OK 7B168DB2D8F3EBAE6A0235AFF7CEDAC279ECBA6DDE83099816383E94B3B2020C
+REP> OK 0:7B168DB2D8F3EBAE6A0235AFF7CEDAC279ECBA6DDE83099816383E94B3B2020C
+
+# Feedback containing two device tokens that no longer exists.
+# (apnsd configured to print device tokens as base64.)
+REQ> feedback
+REP> OK 1344433059:W2EZnh9/mwvjB/AauQ3mQ/wKgAazGc/FwT+omnvv+pk= 1344498238:qnkz8vXkLFQjCtnmnayGV0zazaqEXd9ZGiSR2TY0M0U=
 
 # Feedback containing no erroneous device token.
 REQ> feedback
