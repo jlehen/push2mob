@@ -130,17 +130,37 @@ class TLSConnectionMaker:
         self.cert = cert
         self.key = key
 
-    def __call__(self, peer):
+    def __call__(self, peer, sleeptime, errorstring):
         """
         Creates an SSL socket to the given `peer', which is a tuple
         (host, port).
         """
-        ai = socket.getaddrinfo(peer[0], peer[1], 0, 0, socket.IPPROTO_TCP)
-        s = socket.socket(ai[0][0], ai[0][1], ai[0][2])
-        sslsock = ssl.wrap_socket(s, keyfile=self.key, certfile=self.cert,
-            server_side=False, cert_reqs=ssl.CERT_REQUIRED,
-            ca_certs=self.cacerts)
-        sslsock.connect(ai[0][4])
+        while True:
+            try:
+                ai = socket.getaddrinfo(peer[0], peer[1], 0, 0,
+                    socket.IPPROTO_TCP)
+                s = socket.socket(ai[0][0], ai[0][1], ai[0][2])
+                sslsock = ssl.wrap_socket(s, keyfile=self.key,
+                    certfile=self.cert, server_side=False,
+                    cert_reqs=ssl.CERT_REQUIRED, ca_certs=self.cacerts)
+                sslsock.connect(ai[0][4])
+                break
+            except socket.gaierror as e:
+                st = 1
+            except ssl.SSLError as e:
+                # If there is an SSL error, it may be an authentication
+                # error and retrying too often may lead us to be
+                # banned.
+                st = sleeptime
+            except Exception as e:
+                # Will be at least 1.
+                st = (sleeptime + 9) / 10
+            logging.error(errorstring % (self.gateway[0], self.gateway[1], e))
+            if sleeptime == 0:
+                sslsock = None
+                break
+            time.sleep(st)
+
         return sslsock
 
 # This will be used as a function
@@ -189,6 +209,8 @@ class APNSAgent(threading.Thread):
     _EXTENDEDNOTIFICATION = 1
     _MAXTRIAL = 2
     _INVALIDTOKENSTATUS = 8
+    # Time between each connection retry if SSL auth error.
+    _RETRYTIME = 60
 
     _error_responses = {
         0: "No error encourtered",
@@ -216,12 +238,8 @@ class APNSAgent(threading.Thread):
         self.sock = None
 
     def _connect(self):
-        try:
-            self.sock = tlsconnect(self.gateway)
-        except Exception as e:
-            logging.error("Couldn't connect to APNS (%s:%d): %s" %
-                (self.gateway[0], self.gateway[1], e))
-            sys.exit(3)
+        self.sock = tlsconnect(self.gateway, APNSAgent._RETRYTIME,
+            "Couldn't connect to APNS (%s:%d): %s")
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
 
     def _close(self):
@@ -368,7 +386,8 @@ class FeedbackAgent(threading.Thread):
             # been used for testing purpose).
             if self.sock is None:
                 time.sleep(self.frequency)
-                self.sock = tlsconnect(self.gateway)
+                self.sock = tlsconnect(self.gateway, self.frequency,
+                    "Couldn't connect to feedback service (%s:%d): %s")
 
             buf = ""
             while True:
@@ -601,27 +620,23 @@ devtokfmt = DeviceTokenFormater(devtok_format)
 #
 tlsconnect = TLSConnectionMaker(cacerts, cert, key)
 logging.info("Testing APNS gateway...")
-try:
-    l = apns_gateway.split(':', 2)
-    apns_gateway = tuple(l)
-    s = tlsconnect(apns_gateway)
-    s.close()
-except Exception as e:
-    logging.error("%s: Cannot connect to APNS: %s" % (CONFIGFILE, e))
+l = apns_gateway.split(':', 2)
+apns_gateway = tuple(l)
+s = tlsconnect(apns_gateway, 0,
+    "%s: Cannot connect to APNS (%%s:%%d): %%s" % CONFIGFILE)
+if s is None:
     sys.exit(1)
+s.close()
 
 logging.info("Testing feedback gateway...")
-try:
-    l = feedback_gateway.split(':', 2)
-    feedback_gateway = tuple(l)
-    feedback_sock = tlsconnect(feedback_gateway)
-    # Do not close it because the feedback service immediately sends
-    # something that we don't want to loose.
-except:
-    logging.error("%s: Cannot connect to feedback service: %s" %
-        (CONFIGFILE, e))
-    logging.error("%s")
+l = feedback_gateway.split(':', 2)
+feedback_gateway = tuple(l)
+feedback_sock = tlsconnect(feedback_gateway, 0,
+    "%s: Cannot connect to feedback service (%%s:%%d): %%s" % CONFIGFILE)
+if feedback_sock is None:
     sys.exit(1)
+# Do not close it because the feedback service immediately sends
+# something that we don't want to loose.
 
 #
 # Creation ZMQ sockets early so we don't waste other resource if it fails.
