@@ -24,6 +24,7 @@
 import ConfigParser
 import Queue
 import base64
+import datetime
 import getopt
 import logging
 import os
@@ -52,6 +53,10 @@ def now():
 
        return int(time.time())
 
+def nowmicro():
+
+        return time.time()
+
 def hexdump(buf, chunklen = 16):
         l = chunklen
         while len(buf) > 0:
@@ -62,6 +67,104 @@ def hexdump(buf, chunklen = 16):
             fmt = "%-" + str(s) + "s%s%s"
             print fmt % (' '.join("%02x" % ord(c) for c in b),
                 ' ', ''.join(['.', c][c.isalnum()] for c in b))
+
+
+class Locker:
+    def __init__(self, lock):
+        self.l = lock
+    def __enter__(self):
+        self.l.acquire()
+        return self.l
+    def __exit__(self, type, value, traceback):
+        self.l.release()
+
+
+class ChronologicalPersistentQueue:
+    """
+    This is a chronological persistent queue (!).  Every object stored in
+    this queue is associated with a timestamp from the Epoch.  Objects
+    are returned chronologically in a timely fashion and are removed from
+    database upon acknowledgement.  Upon started, all returned but
+    unacknowledged are reset.
+    It completely relies on SQLite.
+    """
+
+    _NEGLIGIBLEWAIT = 0.2
+
+    def __init__(self, sqlite, tablename):
+        self.cv = threading.Condition()
+        self.table = tablename
+        self.sqlcon = sqlite3.connect(sqlite, check_same_thread = False)
+        self.sqlcon.isolation_level = None
+        self.sqlcur = self.sqlcon.cursor()
+        cur = self.sqlcur
+        cur.execute(
+            """CREATE TABLE IF NOT EXISTS %s (
+            inuse INTEGER NOT NULL DEFAULT 0,
+            timestamp REAL NOT NULL,
+            data BLOB);""" % tablename)
+        cur.execute(
+            """CREATE INDEX IF NOT EXISTS chronological ON %s (
+            inuse, timestamp)""" % tablename)
+        cur.execute(
+            """UPDATE %s SET inuse = 0""" % tablename)
+
+    def put(self, when, item):
+        """
+        Put the item in the queue with the given timestamp.
+        """
+
+        with Locker(self.cv):
+            self.sqlcur.execute(
+                """INSERT INTO %s (timestamp, data)
+                VALUES(?, ?)""" % self.table, (when, str(item)))
+            timedelta = when - nowmicro()
+            if timedelta < self.__class__._NEGLIGIBLEWAIT:
+                self.cv.notify()
+
+    def put_now(self, item):
+        """
+        Put the item in the queue with the timestamp set to current time.
+        """
+
+        self.put(nowmicro(), item)
+
+    def get(self):
+        """
+        Return the next item chronologically in a timely fashion.
+        The result is a tuple with (rowid, timestamp, item).
+        """
+
+        with Locker(self.cv):
+            while True:
+                self.sqlcur.execute(
+                    """SELECT rowid, timestamp, data from %s
+                    WHERE inuse = 0
+                    ORDER BY timestamp LIMIT 1;""" % self.table)
+                r = self.sqlcur.fetchone()
+                if r is None:
+                    self.cv.wait()
+                    continue
+                timedelta = r[1] - nowmicro()
+                if timedelta >= self.__class__._NEGLIGIBLEWAIT:
+                    self.cv.wait(timedelta)
+                    continue
+                self.sqlcur.execute(
+                    """UPDATE %s SET inuse = 1
+                    WHERE rowid = ?;""" % self.table, (r[0], ))
+                return (r[0], r[1], eval(r[2]))
+
+    def ack(self, t):
+        """
+        Delete item from the queue.  The argument is the tuple return
+        by the get() method.
+        """
+
+        with Locker(self.cv):
+            self.sqlcur.execute(
+                """DELETE FROM %s WHERE rowid = ?;""" % self.table,
+                (t[0], ))
+
 
 class PersistentQueue(Queue.Queue):
     """
