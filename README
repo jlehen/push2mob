@@ -70,6 +70,9 @@ elements.  BNF syntax:
   sending push notifications to the device.
   If the timestamp is 0, this means that the APNS thinks it is an invalid
   token.
+  NOTE : This means you HAVE TO make a special case in your code to test
+  for timestamp == 0, otherwise it will obviously older than the
+  registeration time of the device token and you will discard it!
 
 
 III. EXAMPLE:
