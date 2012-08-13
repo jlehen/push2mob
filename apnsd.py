@@ -79,14 +79,13 @@ class Locker:
         self.l.release()
 
 
-class ChronologicalPersistentQueue:
+class OrderedPersistentQueue:
     """
-    This is a chronological persistent queue (!).  Every object stored in
-    this queue is associated with a timestamp from the Epoch.  Objects
-    are returned chronologically in a timely fashion and are removed from
-    database upon acknowledgement.  Upon started, all returned but
-    unacknowledged are reset.
-    It completely relies on SQLite.
+    This is an ordered persistent queue (!).  Every object stored in this
+    queue is associated with an ordering provided as a real number .  Objects
+    are returned in order and are removed from database upon acknowledgement.
+    Upon startup, all returned but unacknowledged are reset.  It completely
+    relies on SQLite.
     """
 
     _NEGLIGIBLEWAIT = 0.2
@@ -101,13 +100,105 @@ class ChronologicalPersistentQueue:
         cur.execute(
             """CREATE TABLE IF NOT EXISTS %s (
             inuse INTEGER NOT NULL DEFAULT 0,
-            timestamp REAL NOT NULL,
+            ordering REAL NOT NULL,
             data BLOB);""" % tablename)
         cur.execute(
-            """CREATE INDEX IF NOT EXISTS chronological ON %s (
-            inuse, timestamp)""" % tablename)
+            """CREATE INDEX IF NOT EXISTS ordering ON %s (
+            inuse, ordering)""" % tablename)
         cur.execute(
             """UPDATE %s SET inuse = 0""" % tablename)
+
+    def _put(self, ordering, item):
+        """
+        Actually record in the database.
+        This must be called with self.cv locked.
+        """
+
+        self.sqlcur.execute(
+            """INSERT INTO %s (ordering, data)
+            VALUES(?, ?)""" % self.table, (ordering, str(item)))
+
+    def _pick(self):
+        """
+        Lookup next item in the database.  Returns a tuple containing
+        (rowid, ordering, item)
+        This must be called with self.cv locked.
+        """
+
+        while True:
+            self.sqlcur.execute(
+                """SELECT rowid, ordering, data from %s
+                WHERE inuse = 0
+                ORDER BY ordering LIMIT 1;""" % self.table)
+            r = self.sqlcur.fetchone()
+            if r is None:
+                self.cv.wait()
+                continue
+            return (r[0], r[1], eval(r[2]))
+
+    def _grab(self, r):
+        """
+        Actually record the item as being in use in the database.
+        The argument is the tuple returned by _pick().
+        This must be called with self.cv locked.
+        """
+
+        self.sqlcur.execute(
+            """UPDATE %s SET inuse = 1
+            WHERE rowid = ?;""" % self.table, (r[0], ))
+
+    def _ack(self, r):
+        """
+        Actually delete the item from the database.
+        The argument is the tuple returned by _pick().
+        This must be called with self.cv locked.
+        """
+
+        self.sqlcur.execute(
+            """DELETE FROM %s WHERE rowid = ?;""" % self.table,
+            (r[0], ))
+
+    def put(self, ordering, item):
+        """
+        Put the item in the queue with the given ordering.
+        """
+
+        with Locker(self.cv):
+            self._put(ordering, item)
+            self.cv.notify()
+
+    def get(self):
+        """
+        Return the next item chronologically in a timely fashion.
+        The result is a tuple with (rowid, ordering, item).
+        """
+
+        with Locker(self.cv):
+            r = self._pick()
+            self._grab(r)
+            return r
+
+    def ack(self, t):
+        """
+        Delete item from the queue.  The argument is the tuple returned
+        by the get() method.
+        """
+
+        with Locker(self.cv):
+            self._ack(t)
+
+
+class ChronologicalPersistentQueue(OrderedPersistentQueue):
+    """
+    This is a chronological persistent queue (!).  Every object stored in
+    this queue is associated with a timestamp from the Epoch.  Objects
+    are returned chronologically in a timely fashion and are removed from
+    database upon acknowledgement.  Upon started, all returned but
+    unacknowledged are reset.
+    """
+
+    def __init__(self, sqlite, tablename):
+        OrderedPersistentQueue.__init__(self, sqlite, tablename)
 
     def put(self, when, item):
         """
@@ -115,9 +206,7 @@ class ChronologicalPersistentQueue:
         """
 
         with Locker(self.cv):
-            self.sqlcur.execute(
-                """INSERT INTO %s (timestamp, data)
-                VALUES(?, ?)""" % self.table, (when, str(item)))
+            self._put(when, item)
             timedelta = when - nowmicro()
             if timedelta < self.__class__._NEGLIGIBLEWAIT:
                 self.cv.notify()
@@ -136,34 +225,15 @@ class ChronologicalPersistentQueue:
         """
 
         with Locker(self.cv):
+            r = self._pick()
             while True:
-                self.sqlcur.execute(
-                    """SELECT rowid, timestamp, data from %s
-                    WHERE inuse = 0
-                    ORDER BY timestamp LIMIT 1;""" % self.table)
-                r = self.sqlcur.fetchone()
-                if r is None:
-                    self.cv.wait()
-                    continue
                 timedelta = r[1] - nowmicro()
                 if timedelta >= self.__class__._NEGLIGIBLEWAIT:
                     self.cv.wait(timedelta)
                     continue
-                self.sqlcur.execute(
-                    """UPDATE %s SET inuse = 1
-                    WHERE rowid = ?;""" % self.table, (r[0], ))
-                return (r[0], r[1], eval(r[2]))
-
-    def ack(self, t):
-        """
-        Delete item from the queue.  The argument is the tuple return
-        by the get() method.
-        """
-
-        with Locker(self.cv):
-            self.sqlcur.execute(
-                """DELETE FROM %s WHERE rowid = ?;""" % self.table,
-                (t[0], ))
+                break
+            self._grab(r)
+            return r
 
 
 class PersistentQueue(Queue.Queue):
