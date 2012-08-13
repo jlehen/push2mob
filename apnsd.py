@@ -340,6 +340,10 @@ class TLSConnectionMaker:
 tlsconnect = None
 
 
+#############################################################################
+# APNS stuff.
+#############################################################################
+
 class RecentNotifications(threading.Thread):
     """
     Each instance of this class goes with one APNSAgent instance.
@@ -724,9 +728,111 @@ class Listener(threading.Thread):
             self._error("Invalid input", msg)
 
 
-#
+#############################################################################
+# GCM stuff.
+#############################################################################
+
+class RegisterationIDSChanges:
+    """
+    This object records all recent changes to registeration IDs as reported
+    by CGM.  A registeration ID can be replaced by a new one, not
+    registered any more or invalid.
+    Each time the queryAll() method is called, the current record is marked
+    for deletion in "flushafter" seconds, this gives the opportunity to the
+    user application to update its data.
+    """
+
+    REPLACED = 1
+    NOTREGISTERED = 2
+    INVALID = 3
+
+    def __init__(self, sqlite, tablename, flushafter):
+        self.mutex = threading.Lock()
+        self.regidmap = {}
+        self.prevregidmap = {}
+        self.tstamp = 0
+        self.flushafter = flushafter
+
+        self.table = tablename
+        self.sqlcon = sqlite3.connect(sqlite, check_same_thread = False)
+        self.sqlcon.isolation_level = None
+        self.sqlcur = self.sqlcon.cursor()
+        cur = self.sqlcur
+        cur.execute(
+            """CREATE TABLE IF NOT EXISTS %s (
+            regid VARCHAR(256) PRIMARY KEY NOT NULL,
+            state INTEGER NOT NULL DEFAULT 0,
+            newregid VARCHAR(256))""" % tablename)
+
+        cur.execute('SELECT regid, state, newregid FROM %s;' % tablename)
+        while True:
+            r = cur.fetchone()
+            if r is None:
+                break
+            self.regidmap[r[0]] = (r[1], r[2])
+
+    def _update(self, regid, state, newregid)
+
+        with Locker(self.mutex):
+            self.sqlcur.execute(
+                """INSERT OR REPLACE INTO %s (regid, state, newregid)
+                VALUES (?, ?, ?)""" % self.table, (regid, state, newregid))
+            self.regidmap[self.i][regid] = (state, newregid)
+
+    def replace(self, oregid, nregid):
+        """
+        A new registeration ID (nregid) replaced the old one (oregid).
+        """
+
+        self._update(oregid, RegisterationIDSChanges.REPLACED, nregid)
+
+    def unregister(self, regid):
+        """
+        The registeration ID has been unregistered (application removed
+        from device).
+        """
+
+        self._update(oregid, RegisterationIDSChanges.NOTREGISTERED, "")
+
+    def invalidate(self, regid):
+        """
+        The registeration ID has been pointed as invalid by the server.
+        """
+
+        self._update(oregid, RegisterationIDSChanges.INVALID, "")
+
+    def query(self, regid):
+        """
+        Return status of the requested registeration ID.
+        """
+
+        with Locker(self.mutex):
+            if self.tstamp != 0 and now() - self.tstamp >= self.flushafter:
+                self.prevregidmap = {}
+                self.tstamp = 0
+
+            r = self.regidmap.get(regid)
+            if r is None:
+                r = self.prevregidmap.get(regid)
+            return r
+
+    def queryAll(self):
+        """
+        Return the whole content of the database as a list of tuples:
+        (regid, state, newregid).
+        """
+
+        with Locker(self.mutex):
+            r = [(k, v[0], v[1]) for (k, v) in self.regidmap.iteritems()]
+            self.prevregidmap = self.regidmap
+            self.tstamp = now()
+            self.regidmap = {}
+            return r
+
+
+#############################################################################
 # Main.
-#
+#############################################################################
 
 try:
     opts, args = getopt.getopt(sys.argv[1:], "c:h")
