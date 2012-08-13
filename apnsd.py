@@ -167,35 +167,40 @@ class TLSConnectionMaker:
 tlsconnect = None
 
 
-class RecentNotifications(threading.Thread):
+class RecentNotifications:
     """
     Each instance of this class goes with one APNSAgent instance.
     It records notifications that have been recently sent by this
     agent.
+    We do not need any locking as each object is accessed by only
+    one thread (APNSAgent).
     """
 
     def __init__(self, maxerrorwait):
-        threading.Thread.__init__(self)
         if maxerrorwait != 0:
             # For an error wait of 0.1 seconds, this
             # will rotate the dicts every minute.
-            self.swtime = 600 * maxerrorwait
+            self.rotatetime = 600 * maxerrorwait
         else:
-            self.swtime = 10
+            self.rotatetime = 10
+        self.tstamp = now()
         self.n = [{}, {}]
         self.i = 0
 
-    def run(self):
-        while True:
-            time.sleep(self.swtime)
-            j = (self.i + 1) % 2
-            self.n[j] = {}
-            self.i = j
+    def _rotate(self):
+        # This part should be protected by a mutex if the object was
+        # accessed by multiple threads.
+        if now() - self.tstamp >= self.rotatetime:
+            i = (self.i + 1) % 2
+            self.n[i] = {}
+            self.i = i
 
     def record(self, ident, notification):
+        self._rotate()
         self.n[self.i][ident] = notification
 
     def lookup(self, ident):
+        self._rotate()
         i0 = self.i
         i1 = (i + 1) % 2
         n = self.n[i0].get(ident)
