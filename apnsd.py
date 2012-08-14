@@ -368,6 +368,8 @@ class APNSRecentNotifications:
             i = (self.i + 1) % 2
             self.n[i] = {}
             self.i = i
+            self.tstamp = now()
+        
 
     def record(self, ident, notification):
         self._rotate()
@@ -476,7 +478,7 @@ class APNSAgent(threading.Thread):
             if self.sock is None:
                 timeout = None
             else:
-                imeout = 1
+                timeout = 1
             try:
                 ident, creation, expiry, devtok, payload = \
                     self.queue.get(True, timeout)
