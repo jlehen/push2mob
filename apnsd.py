@@ -344,7 +344,7 @@ tlsconnect = None
 # APNS stuff.
 #############################################################################
 
-class RecentNotifications:
+class APNSRecentNotifications:
     """
     Each instance of this class goes with one APNSAgent instance.
     It records notifications that have been recently sent by this
@@ -416,7 +416,7 @@ class APNSAgent(threading.Thread):
         self.maxerrorwait = maxerrorwait
         self.feedbackq = feedbackq
         # Tuple: (id, bintok)
-        self.recentnotifications = RecentNotifications(maxerrorwait)
+        self.recentnotifications = APNSRecentNotifications(maxerrorwait)
         self.sock = None
 
     def _connect(self):
@@ -544,7 +544,7 @@ class APNSAgent(threading.Thread):
                     self._processerror()
 
 
-class FeedbackAgent(threading.Thread):
+class APNSFeedbackAgent(threading.Thread):
 
     def __init__(self, queue, sock, gateway, frequency):
         threading.Thread.__init__(self)
@@ -599,7 +599,7 @@ class FeedbackAgent(threading.Thread):
             self._close()
 
 
-class Listener(threading.Thread):
+class APNSListener(threading.Thread):
 
     _PAYLOADMAXLEN = 256
     _WHTSP = re.compile("\s+")
@@ -623,13 +623,13 @@ class Listener(threading.Thread):
     def _parse_send(self, msg):
         cmdargs = msg[5:]
         try:
-            expiry, ntok, cmdargs = re.split(Listener._WHTSP, cmdargs, 2)
-            expiry, nsub = re.subn(Listener._PLUS, "", expiry, 1)
+            expiry, ntok, cmdargs = re.split(APNSListener._WHTSP, cmdargs, 2)
+            expiry, nsub = re.subn(APNSListener._PLUS, "", expiry, 1)
             expiry = int(expiry)
             if nsub == 1:
                 expiry = now() + expiry
             ntok = int(ntok)
-            l = re.split(Listener._WHTSP, cmdargs, ntok)
+            l = re.split(APNSListener._WHTSP, cmdargs, ntok)
             devtoks = l[0:ntok]
             payload = l[ntok]
         except Exception as e:
@@ -671,9 +671,9 @@ class Listener(threading.Thread):
         if wrongtok:
             return None
 
-        if len(payload) > Listener._PAYLOADMAXLEN:
+        if len(payload) > APNSListener._PAYLOADMAXLEN:
             self._error("Payload too long (%d > %d)" % len(payload),
-                Listener._PAYLOADMAXLEN, payload)
+                APNSListener._PAYLOADMAXLEN, payload)
             return None
 
         return (expiry, devtoks, payload)
@@ -737,7 +737,7 @@ class Listener(threading.Thread):
 # GCM stuff.
 #############################################################################
 
-class RegisterationIDSChanges:
+class GCMRegisterationIDSChanges:
     """
     This object records all recent changes to registeration IDs as reported
     by CGM.  A registeration ID can be replaced by a new one, not
@@ -789,7 +789,7 @@ class RegisterationIDSChanges:
         A new registeration ID (nregid) replaced the old one (oregid).
         """
 
-        self._update(oregid, RegisterationIDSChanges.REPLACED, nregid)
+        self._update(oregid, GCMRegisterationIDSChanges.REPLACED, nregid)
 
     def unregister(self, regid):
         """
@@ -797,14 +797,14 @@ class RegisterationIDSChanges:
         from device).
         """
 
-        self._update(oregid, RegisterationIDSChanges.NOTREGISTERED, "")
+        self._update(oregid, GCMRegisterationIDSChanges.NOTREGISTERED, "")
 
     def invalidate(self, regid):
         """
         The registeration ID has been pointed as invalid by the server.
         """
 
-        self._update(oregid, RegisterationIDSChanges.INVALID, "")
+        self._update(oregid, GCMRegisterationIDSChanges.INVALID, "")
 
     def query(self, regid):
         """
@@ -966,11 +966,11 @@ for i in range(apns_concurrency):
         feedbackq)
     t.start()
 
-t = FeedbackAgent(feedbackq, feedback_sock, feedback_gateway, feedback_freq)
+t = APNSFeedbackAgent(feedbackq, feedback_sock, feedback_gateway, feedback_freq)
 t.start()
 
 #
-# Start Listener thread.
+# Start APNSListener thread.
 #
-t = Listener(sqlitedb, zmqsock, apnsq, feedbackq)
+t = APNSListener(sqlitedb, zmqsock, apnsq, feedbackq)
 t.run()
