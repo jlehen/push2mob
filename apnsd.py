@@ -336,9 +336,6 @@ class TLSConnectionMaker:
 
         return sslsock
 
-# This will be used as a function
-tlsconnect = None
-
 
 #############################################################################
 # APNS stuff.
@@ -407,7 +404,9 @@ class APNSAgent(threading.Thread):
         255: "None (unknown)"
     }
 
-    def __init__(self, queue, gateway, maxnotiflag, maxerrorwait, feedbackq):
+    def __init__(self, queue, gateway, maxnotiflag, maxerrorwait, feedbackq,
+        tlsconnect):
+
         threading.Thread.__init__(self)
         self.daemon = True
         self.queue = queue
@@ -415,12 +414,13 @@ class APNSAgent(threading.Thread):
         self.maxnotiflag = maxnotiflag
         self.maxerrorwait = maxerrorwait
         self.feedbackq = feedbackq
+        self.tlsconnect = tlsconnect
         # Tuple: (id, bintok)
         self.recentnotifications = APNSRecentNotifications(maxerrorwait)
         self.sock = None
 
     def _connect(self):
-        self.sock = tlsconnect(self.gateway, APNSAgent._RETRYTIME,
+        self.sock = self.tlsconnect(self.gateway, APNSAgent._RETRYTIME,
             "Couldn't connect to APNS (%s:%d): %s")
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
 
@@ -546,13 +546,14 @@ class APNSAgent(threading.Thread):
 
 class APNSFeedbackAgent(threading.Thread):
 
-    def __init__(self, queue, sock, gateway, frequency):
+    def __init__(self, queue, sock, gateway, frequency, tlsconnect):
         threading.Thread.__init__(self)
         self.daemon = True
         self.sock = sock
         self.queue = queue
         self.gateway = gateway
         self.frequency = frequency
+        self.tlsconnect = tlsconnect
         self.fmt = '> IH ' + str(DEVTOKLEN) + 's'
         self.tuplesize = struct.calcsize(self.fmt)
 
@@ -568,7 +569,7 @@ class APNSFeedbackAgent(threading.Thread):
             # been used for testing purpose).
             if self.sock is None:
                 time.sleep(self.frequency)
-                self.sock = tlsconnect(self.gateway, self.frequency,
+                self.sock = self.tlsconnect(self.gateway, self.frequency,
                     "Couldn't connect to feedback service (%s:%d): %s")
 
             buf = ""
@@ -900,13 +901,13 @@ if apns_devtok_format != 'base64' and apns_devtok_format != 'hex':
 devtokfmt = DeviceTokenFormater(apns_devtok_format)
 
 #
-# Check APNS/feedback TLS connections.
+# Check APNS push/feedback TLS connections.
 #
-tlsconnect = TLSConnectionMaker(apns_cacerts, apns_cert, apns_key)
+apns_tlsconnect = TLSConnectionMaker(apns_cacerts, apns_cert, apns_key)
 logging.info("Testing APNS push gateway...")
 l = apns_push_gateway.split(':', 2)
 apns_push_gateway = (l[0], int(l[1]))
-s = tlsconnect(apns_push_gateway, 0,
+s = apns_tlsconnect(apns_push_gateway, 0,
     "%s: Cannot connect to APNS (%%s:%%d): %%s" % CONFIGFILE)
 if s is None:
     sys.exit(1)
@@ -915,7 +916,7 @@ s.close()
 logging.info("Testing APNS feedback gateway...")
 l = apns_feedback_gateway.split(':', 2)
 apns_feedback_gateway = (l[0], int(l[1]))
-apns_feedback_sock = tlsconnect(apns_feedback_gateway, 0,
+apns_feedback_sock = apns_tlsconnect(apns_feedback_gateway, 0,
     "%s: Cannot connect to APNS feedback service (%%s:%%d): %%s" % CONFIGFILE)
 if apns_feedback_sock is None:
     sys.exit(1)
@@ -963,11 +964,11 @@ if len(logfile) != 0:
 #
 for i in range(apns_push_concurrency):
     t = APNSAgent(apns_pushq, apns_push_gateway, apns_push_max_notif_lag,
-        apns_push_max_error_wait, apns_feedbackq)
+        apns_push_max_error_wait, apns_feedbackq, apns_tlsconnect)
     t.start()
 
 t = APNSFeedbackAgent(apns_feedbackq, apns_feedback_sock,
-    apns_feedback_gateway, apns_feedback_freq)
+    apns_feedback_gateway, apns_feedback_freq, apns_tlsconnect)
 t.start()
 
 #
