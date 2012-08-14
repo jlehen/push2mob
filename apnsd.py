@@ -883,6 +883,10 @@ try:
     apns_push_max_error_wait = float(cp.get('apns', 'push_max_error_wait'))
     apns_feedback_gateway = cp.get('apns', 'feedback_gateway')
     apns_feedback_freq = int(cp.get('apns', 'feedback_frequency'))
+    gcm_zmq_bind = cp.get('gcm', 'zmq_bind')
+    gcm_sqlite_db = cp.get('gcm', 'sqlite_db')
+    gcm_api_key = cp.get('gcm', 'api_key')
+    gcm_concurrency = cp.get('gcm', 'concurrency')
 except ConfigParser.Error as e:
     logging.error("%s: %s" % (CONFIGFILE, e))
     sys.exit(1)
