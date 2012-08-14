@@ -328,7 +328,7 @@ class TLSConnectionMaker:
             except Exception as e:
                 # Will be at least 1.
                 st = (sleeptime + 9) / 10
-            logging.error(errorstring % (self.gateway[0], self.gateway[1], e))
+            logging.error(errorstring % (peer[0], peer[1], e))
             if sleeptime == 0:
                 sslsock = None
                 break
@@ -476,7 +476,7 @@ class APNSAgent(threading.Thread):
             if self.sock is None:
                 timeout = None
             else:
-                timeout = 1
+                imeout = 1
             try:
                 ident, creation, expiry, devtok, payload = \
                     self.queue.get(True, timeout)
@@ -776,7 +776,7 @@ class GCMRegisterationIDSChanges:
                 break
             self.regidmap[r[0]] = (r[1], r[2])
 
-    def _update(self, regid, state, newregid)
+    def _update(self, regid, state, newregid):
 
         with Locker(self.mutex):
             self.sqlcur.execute(
@@ -867,19 +867,19 @@ if len(l) == 0:
     raise Exception("Cannot open '%s'" % CONFIGFILE)
 
 try:
-    zmq_bind = cp.get('apnsd', 'zmq_bind')
-    sqlitedb = cp.get('apnsd', 'sqlite_db')
-    logfile = cp.get('apnsd', 'daemon_log_file')
-    cacerts = cp.get('apnsd', 'cacerts_file')
-    cert = cp.get('apnsd', 'cert_file')
-    key = cp.get('apnsd', 'key_file')
-    devtok_format = cp.get('apnsd', 'device_token_format')
-    apns_gateway = cp.get('apns', 'gateway')
-    apns_concurrency = int(cp.get('apns', 'concurrency'))
-    apns_max_notif_lag = int(cp.get('apns', 'max_notification_lag'))
-    apns_max_error_wait = float(cp.get('apns', 'max_error_wait'))
-    feedback_gateway = cp.get('feedback', 'gateway')
-    feedback_freq = int(cp.get('feedback', 'frequency'))
+    logfile = cp.get('main', 'daemon_log_file')
+    apns_zmq_bind = cp.get('apns', 'zmq_bind')
+    apns_sqlitedb = cp.get('apns', 'sqlite_db')
+    apns_cacerts = cp.get('apns', 'cacerts_file')
+    apns_cert = cp.get('apns', 'cert_file')
+    apns_key = cp.get('apns', 'key_file')
+    apns_devtok_format = cp.get('apns', 'device_token_format')
+    apns_push_gateway = cp.get('apns', 'push_gateway')
+    apns_push_concurrency = int(cp.get('apns', 'push_concurrency'))
+    apns_push_max_notif_lag = int(cp.get('apns', 'push_max_notification_lag'))
+    apns_push_max_error_wait = float(cp.get('apns', 'push_max_error_wait'))
+    apns_feedback_gateway = cp.get('apns', 'feedback_gateway')
+    apns_feedback_freq = int(cp.get('apns', 'feedback_frequency'))
 except ConfigParser.Error as e:
     logging.error("%s: %s" % (CONFIGFILE, e))
     sys.exit(1)
@@ -893,44 +893,44 @@ else:
             format='%(asctime)s %(message)s',
             datefmt='%Y/%m/%d %H:%M:%S')
 
-if devtok_format != 'base64' and devtok_format != 'hex':
+if apns_devtok_format != 'base64' and apns_devtok_format != 'hex':
     logging.error("%s: Unknown device token format: %s" %
-        (CONFIGFILE, devtok_format))
+        (CONFIGFILE, apns_devtok_format))
     sys.exit(1)
-devtokfmt = DeviceTokenFormater(devtok_format)
+devtokfmt = DeviceTokenFormater(apns_devtok_format)
 
 #
 # Check APNS/feedback TLS connections.
 #
-tlsconnect = TLSConnectionMaker(cacerts, cert, key)
-logging.info("Testing APNS gateway...")
-l = apns_gateway.split(':', 2)
-apns_gateway = tuple(l)
-s = tlsconnect(apns_gateway, 0,
+tlsconnect = TLSConnectionMaker(apns_cacerts, apns_cert, apns_key)
+logging.info("Testing APNS push gateway...")
+l = apns_push_gateway.split(':', 2)
+apns_push_gateway = (l[0], int(l[1]))
+s = tlsconnect(apns_push_gateway, 0,
     "%s: Cannot connect to APNS (%%s:%%d): %%s" % CONFIGFILE)
 if s is None:
     sys.exit(1)
 s.close()
 
-logging.info("Testing feedback gateway...")
-l = feedback_gateway.split(':', 2)
-feedback_gateway = tuple(l)
-feedback_sock = tlsconnect(feedback_gateway, 0,
-    "%s: Cannot connect to feedback service (%%s:%%d): %%s" % CONFIGFILE)
-if feedback_sock is None:
+logging.info("Testing APNS feedback gateway...")
+l = apns_feedback_gateway.split(':', 2)
+apns_feedback_gateway = (l[0], int(l[1]))
+apns_feedback_sock = tlsconnect(apns_feedback_gateway, 0,
+    "%s: Cannot connect to APNS feedback service (%%s:%%d): %%s" % CONFIGFILE)
+if apns_feedback_sock is None:
     sys.exit(1)
-# Do not close it because the feedback service immediately sends
+# Do not close it because the APNS feedback service immediately sends
 # something that we don't want to loose.
 
 #
 # Creation ZMQ sockets early so we don't waste other resource if it fails.
 #
-logging.info("Notifications ZMQ REP socket bound on tcp://%s" %
-    zmq_bind)
+logging.info("ZMQ REP socket for APNS service bound on tcp://%s" %
+    apns_zmq_bind)
 try:
     zmqctx_r = zmq.Context()
-    zmqsock = zmqctx_r.socket(zmq.REP)
-    zmqsock.bind("tcp://%s" % zmq_bind)
+    apns_zmqsock = zmqctx_r.socket(zmq.REP)
+    apns_zmqsock.bind("tcp://%s" % apns_zmq_bind)
 except zmq.core.error.ZMQError as e:
     print e
     sys.exit(2)
@@ -938,12 +938,12 @@ except zmq.core.error.ZMQError as e:
 #
 # Create persistent queues for notifications and feedback.
 #
-apnsq = PersistentQueue(sqlitedb, 'notifications')
-feedbackq = PersistentQueue(sqlitedb, 'feedback')
+apns_pushq = PersistentQueue(apns_sqlitedb, 'notifications')
+apns_feedbackq = PersistentQueue(apns_sqlitedb, 'feedback')
 logging.info("%d notifications retrieved from persistent storage" %
-    apnsq.qsize())
+    apns_pushq.qsize())
 logging.info("%d feedbacks retrieved from persistent storage" %
-    feedbackq.qsize())
+    apns_feedbackq.qsize())
 
 #
 # Daemonize.
@@ -961,16 +961,17 @@ if len(logfile) != 0:
 #
 # Start APNS threads and Feedback one.
 #
-for i in range(apns_concurrency):
-    t = APNSAgent(apnsq, apns_gateway, apns_max_notif_lag, apns_max_error_wait,
-        feedbackq)
+for i in range(apns_push_concurrency):
+    t = APNSAgent(apns_pushq, apns_push_gateway, apns_push_max_notif_lag,
+        apns_push_max_error_wait, apns_feedbackq)
     t.start()
 
-t = APNSFeedbackAgent(feedbackq, feedback_sock, feedback_gateway, feedback_freq)
+t = APNSFeedbackAgent(apns_feedbackq, apns_feedback_sock,
+    apns_feedback_gateway, apns_feedback_freq)
 t.start()
 
 #
 # Start APNSListener thread.
 #
-t = APNSListener(sqlitedb, zmqsock, apnsq, feedbackq)
+t = APNSListener(apns_sqlitedb, apns_zmqsock, apns_pushq, apns_feedbackq)
 t.run()
