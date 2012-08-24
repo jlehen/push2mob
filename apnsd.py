@@ -727,10 +727,7 @@ class APNSListener(Listener):
 
         # Check device token format.
         goodtoks = []
-        wrongtok = 0
         for dt in devtoks:
-            if wrongtok:
-                    break
             devtok = ''
             if len(dt) == DEVTOKLEN * 2:
                 # Hexadecimal device token.
@@ -744,13 +741,11 @@ class APNSListener(Listener):
                 except TypeError:
                     self._send_error("Wrong base64 encoding for device " \
                         "token: %s" % dt)
-                    wrongtok = 1
-                    continue
+                    return None
             if len(devtok) != DEVTOKLEN:
                 self._send_error("Wrong device token length " \
                     "(%d != %s): %s" % (len(devtok), DEVTOKLEN, dt))
-                wrongtok = 1
-                continue
+                return None
             # Store the token in base64 in the queue, text is better
             # to debug.
             logging.debug("Got notification for device token %s, " \
@@ -758,8 +753,6 @@ class APNSListener(Listener):
                 expiry))
             goodtoks.append(base64.standard_b64encode(devtok))
         devtoks = goodtoks
-        if wrongtok:
-            return None
 
         # Check payload length.
         if len(payload) > APNSListener._PAYLOADMAXLEN:
@@ -772,9 +765,6 @@ class APNSListener(Listener):
 
     def _perform_send(self, arglist, devtoks, payload):
         expiry = arglist[0]
-        print "DEBUG: ", expiry
-        print "DEBUG: ", devtoks
-        print "DEBUG: ", payload
         self.sqlcur.execute('UPDATE ident SET cur=?',
             (self.curid + len(devtoks), ))
 
