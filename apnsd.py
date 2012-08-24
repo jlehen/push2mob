@@ -337,6 +337,110 @@ class TLSConnectionMaker:
         return sslsock
 
 
+class Listener(threading.Thread):
+    """
+    Base class for the ZMQ listening socket.  It receives commands
+    from the client and either enqueues notifications or sends
+    feedback upon demand.
+    """
+
+    _WHTSP = re.compile("\s+")
+    _PLUS = re.compile(r"^\+")
+
+    def __init__(self, zmqsock, apnsq, feedbackq):
+        threading.Thread.__init__(self)
+        self.zmqsock = zmqsock
+        self.apnsq = apnsq
+        self.feedbackq = feedbackq
+
+    def _send_error(self, msg, detail = None):
+        """
+        Returns an error message to the ZMQ peer.
+        If `detail' is provided, is will be shown in the daemon log.
+        """
+        if detail is not None:
+            fmt = msg + ": %s"
+            logging.warning(fmt, detail)
+        else:
+            logging.warning(msg)
+        self.zmqsock.send("ERROR " + msg)
+
+    def _send_ok(self, res):
+        if len(res) == 0:
+            self.zmqsock.send("OK")
+        else:
+            self.zmqsock.send("OK %s" % res)
+
+    @staticmethod
+    def _parse_expiry(expiry):
+        """
+        Parse expiry handling absolute format (seconds Epoch) or
+        relative format (starting with "+").
+        """
+        expiry, nsub = re.subn(Listener._PLUS, "", expiry, 1)
+        expiry = int(expiry)
+        if nsub == 1:
+            expiry = now() + expiry
+        return expiry
+
+    def _parse_send(self, nargs, msg):
+        """
+        Parse the send command with a variable number of mandatory
+        arguments, using the following grammar:
+        send <arg1> ... <argn> <ndevices> <dev1> ... <devn> <payload ...>
+        Returns tree a tuple with: (arglist, devlist, payload).  If None
+        is returned, then an error message has already been issued.
+        You probably want to override this method to add sanity checks.
+        """
+        cmdargs = msg[5:]
+        arglist, cmdargs = re.split(APNSListener._WHTSP, cmdargs, nargs)
+        ntok, cmdargs = re.split(APNSListener._WHTSP, cmdargs, 1)
+        ntok = int(ntok)
+        l = re.split(APNSListener._WHTSP, cmdargs, ntok)
+        devlist = l[0:ntok]
+        payload = l[ntok]
+        return (arglist, devlist, payload)
+
+    def _perform_send(self):
+        """
+        Self-explanatory.  You must overload this method.
+        """
+        pass
+
+    def _perform_feedback(self):
+        """
+        Self-explanatory.  You must overload this method.
+        """
+        pass
+
+    def run(self):
+        while True:
+            msg = self.zmqsock.recv()
+            #
+            # Parse line.
+            msg = msg.strip()
+            if msg[0:5].lower().find("send ") == 0:
+                try:
+                    res = self._parse_send(msg)
+                except Exception as e:
+                    self._send_error("Invalid input (%s)" % e , msg)
+                    continue
+                # An error message has already been issued.
+                if res is None:
+                    continue
+
+                res = self._perform_send(*res)
+                _send_ok(res)
+                continue
+
+            elif msg.lower().find("feedback") == 0:
+                res = self._perform_feedback()
+                _send_ok(res)
+                continue
+
+            self._send_error("Invalid input", msg)
+
+
 #############################################################################
 # APNS stuff.
 #############################################################################
@@ -600,104 +704,6 @@ class APNSFeedbackAgent(threading.Thread):
                     self.queue.put((ts, devtok))
 
             self._close()
-
-class Listener(threading.Thread):
-
-    _WHTSP = re.compile("\s+")
-    _PLUS = re.compile(r"^\+")
-
-    def __init__(self, zmqsock, apnsq, feedbackq):
-        threading.Thread.__init__(self)
-        self.zmqsock = zmqsock
-        self.apnsq = apnsq
-        self.feedbackq = feedbackq
-
-    def _send_error(self, msg, detail = None):
-        """
-        Returns an error message to the ZMQ peer.
-        If `detail' is provided, is will be shown in the daemon log.
-        """
-        if detail is not None:
-            fmt = msg + ": %s"
-            logging.warning(fmt, detail)
-        else:
-            logging.warning(msg)
-        self.zmqsock.send("ERROR " + msg)
-
-    def _send_ok(self, res):
-        if len(res) == 0:
-            self.zmqsock.send("OK")
-        else:
-            self.zmqsock.send("OK %s" % res)
-
-    @staticmethod
-    def _parse_expiry(expiry):
-        """
-        Parse expiry handling absolute format (seconds Epoch) or
-        relative format (starting with "+").
-        """
-        expiry, nsub = re.subn(Listener._PLUS, "", expiry, 1)
-        expiry = int(expiry)
-        if nsub == 1:
-            expiry = now() + expiry
-        return expiry
-
-    def _parse_send(self, nargs, msg):
-        """
-        Parse the send command with a variable number of mandatory
-        arguments, using the following grammar:
-        send <arg1> ... <argn> <ndevices> <dev1> ... <devn> <payload ...>
-        Returns tree a tuple with: (arglist, devlist, payload).  If None
-        is returned, then an error message has already been issued.
-        You probably want to override this method to add sanity checks.
-        """
-        cmdargs = msg[5:]
-        arglist, cmdargs = re.split(APNSListener._WHTSP, cmdargs, nargs)
-        ntok, cmdargs = re.split(APNSListener._WHTSP, cmdargs, 1)
-        ntok = int(ntok)
-        l = re.split(APNSListener._WHTSP, cmdargs, ntok)
-        devlist = l[0:ntok]
-        payload = l[ntok]
-        return (arglist, devlist, payload)
-
-    def _perform_send(self):
-        """
-        Self-explanatory.  You must overload this method.
-        """
-        pass
-
-    def _perform_feedback(self):
-        """
-        Self-explanatory.  You must overload this method.
-        """
-        pass
-
-    def run(self):
-        while True:
-            msg = self.zmqsock.recv()
-            #
-            # Parse line.
-            msg = msg.strip()
-            if msg[0:5].lower().find("send ") == 0:
-                try:
-                    res = self._parse_send(msg)
-                except Exception as e:
-                    self._send_error("Invalid input (%s)" % e , msg)
-                    continue
-                # An error message has already been issued.
-                if res is None:
-                    continue
-
-                res = self._perform_send(*res)
-                _send_ok(res)
-                continue
-
-            elif msg.lower().find("feedback") == 0:
-                res = self._perform_feedback()
-                _send_ok(res)
-                continue
-
-            self._send_error("Invalid input", msg)
 
 
 class APNSListener(Listener):
