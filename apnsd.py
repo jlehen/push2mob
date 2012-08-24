@@ -601,21 +601,22 @@ class APNSFeedbackAgent(threading.Thread):
 
             self._close()
 
+class Listener(threading.Thread):
 
-class APNSListener(threading.Thread):
-
-    _PAYLOADMAXLEN = 256
     _WHTSP = re.compile("\s+")
     _PLUS = re.compile(r"^\+")
 
-    def __init__(self, sqlitedb, zmqsock, apnsq, feedbackq):
+    def __init__(self, zmqsock, apnsq, feedbackq):
         threading.Thread.__init__(self)
-        self.sqlitedb = sqlitedb
         self.zmqsock = zmqsock
         self.apnsq = apnsq
         self.feedbackq = feedbackq
 
-    def _error(self, msg, detail = None):
+    def _send_error(self, msg, detail = None):
+        """
+        Returns an error message to the ZMQ peer.
+        If `detail' is provided, is will be shown in the daemon log.
+        """
         if detail is not None:
             fmt = msg + ": %s"
             logging.warning(fmt, detail)
@@ -623,22 +624,102 @@ class APNSListener(threading.Thread):
             logging.warning(msg)
         self.zmqsock.send("ERROR " + msg)
 
-    def _parse_send(self, msg):
-        cmdargs = msg[5:]
-        try:
-            expiry, ntok, cmdargs = re.split(APNSListener._WHTSP, cmdargs, 2)
-            expiry, nsub = re.subn(APNSListener._PLUS, "", expiry, 1)
-            expiry = int(expiry)
-            if nsub == 1:
-                expiry = now() + expiry
-            ntok = int(ntok)
-            l = re.split(APNSListener._WHTSP, cmdargs, ntok)
-            devtoks = l[0:ntok]
-            payload = l[ntok]
-        except Exception as e:
-            self._error("Invalid input (%s)" % e , msg)
-            return None
+    def _send_ok(self, res):
+        if len(res) == 0:
+            self.zmqsock.send("OK")
+        else:
+            self.zmqsock.send("OK %s" % res)
 
+    @staticmethod
+    def _parse_expiry(expiry):
+        """
+        Parse expiry handling absolute format (seconds Epoch) or
+        relative format (starting with "+").
+        """
+        expiry, nsub = re.subn(Listener._PLUS, "", expiry, 1)
+        expiry = int(expiry)
+        if nsub == 1:
+            expiry = now() + expiry
+        return expiry
+
+    def _parse_send(self, nargs, msg):
+        """
+        Parse the send command with a variable number of mandatory
+        arguments, using the following grammar:
+        send <arg1> ... <argn> <ndevices> <dev1> ... <devn> <payload ...>
+        Returns tree a tuple with: (arglist, devlist, payload).  If None
+        is returned, then an error message has already been issued.
+        You probably want to override this method to add sanity checks.
+        """
+        cmdargs = msg[5:]
+        arglist, cmdargs = re.split(APNSListener._WHTSP, cmdargs, nargs)
+        ntok, cmdargs = re.split(APNSListener._WHTSP, cmdargs, 1)
+        ntok = int(ntok)
+        l = re.split(APNSListener._WHTSP, cmdargs, ntok)
+        devlist = l[0:ntok]
+        payload = l[ntok]
+        return (arglist, devlist, payload)
+
+    def _perform_send(self):
+        """
+        Self-explanatory.  You must overload this method.
+        """
+        pass
+
+    def _perform_feedback(self):
+        """
+        Self-explanatory.  You must overload this method.
+        """
+        pass
+
+    def run(self):
+        while True:
+            msg = self.zmqsock.recv()
+            #
+            # Parse line.
+            msg = msg.strip()
+            if msg[0:5].lower().find("send ") == 0:
+                try:
+                    res = self._parse_send(msg)
+                except Exception as e:
+                    self._send_error("Invalid input (%s)" % e , msg)
+                    continue
+                # An error message has already been issued.
+                if res is None:
+                    continue
+
+                res = self._perform_send(*res)
+                _send_ok(res)
+                continue
+
+            elif msg.lower().find("feedback") == 0:
+                res = self._perform_feedback()
+                _send_ok(res)
+                continue
+
+            self._send_error("Invalid input", msg)
+
+
+class APNSListener(Listener):
+
+    _PAYLOADMAXLEN = 256
+
+    def __init__(self, sqlitedb, zmqsock, apnsq, feedbackq):
+        Listener.__init__(self, zmqsock, apnsq, feedbackq)
+        self.sqlitedb = sqlitedb
+
+    def _parse_send(self, msg):
+        arglist, devtoks, payload = Listener._parse_send(self, 1, msg)
+
+        # Check expiry.
+        try:
+            expiry = Listener._parse_expiry(arglist[0])
+        except Exception as e:
+            self._send_error("Invalid expiry value: %s" % arglist[0])
+            return None
+        arglist = [expiry]
+
+        # Check device token format.
         goodtoks = []
         wrongtok = 0
         for dt in devtoks:
@@ -655,12 +736,12 @@ class APNSListener(threading.Thread):
                 try:
                     devtok = base64.standard_b64decode(dt)
                 except TypeError:
-                    self._error("Wrong base64 encoding for device " \
+                    self._send_error("Wrong base64 encoding for device " \
                         "token: %s" % dt)
                     wrongtok = 1
                     continue
             if len(devtok) != DEVTOKLEN:
-                self._error("Wrong device token length " \
+                self._send_error("Wrong device token length " \
                     "(%d != %s): %s" % (len(devtok), DEVTOKLEN, dt))
                 wrongtok = 1
                 continue
@@ -674,15 +755,41 @@ class APNSListener(threading.Thread):
         if wrongtok:
             return None
 
+        # Check payload length.
         if len(payload) > APNSListener._PAYLOADMAXLEN:
-            self._error("Payload too long (%d > %d)" % len(payload),
+            self._send_error("Payload too long (%d > %d)" % len(payload),
                 APNSListener._PAYLOADMAXLEN, payload)
             return None
 
-        return (expiry, devtoks, payload)
+        # Mimic parent's _parse_send() return value.
+        return (arglist, devtoks, payload)
+
+    def _perform_send(self, arglist, devtoks, payload):
+        expiry = arglist[0]
+        print "DEBUG: ", expiry
+        print "DEBUG: ", devtoks
+        print "DEBUG: ", payload
+        self.sqlcur.execute('UPDATE ident SET cur=?',
+            (self.curid + len(devtoks), ))
+
+        idlist = []
+        for devtok in devtoks:
+            self.apnsq.put((self.curid, now(), expiry, devtok, payload))
+            idlist.append(str(self.curid))
+            self.curid = self.curid + 1
+        return ' '.join(idlist)
+
+    def _perform_feedback(self):
+        feedbacks = []
+        try:
+            while True:
+                timestamp, devtok = self.feedbackq.get_nowait()
+                feedbacks.append("%s:%s" % (timestamp, devtok))
+        except Queue.Empty:
+                pass
+        return ' '.join(feedbacks)
 
     def run(self):
-
         # Get current notification identifier.
         sqlcon = sqlite3.connect(self.sqlitedb)
         sqlcon.isolation_level = None
@@ -694,46 +801,12 @@ class APNSListener(threading.Thread):
         if row is None:
             sqlcur.execute('INSERT INTO ident VALUES(0);')
             row = (0,)
-        curid = row[0]
-        logging.info("Notifications current identifier is %d" % curid)
+        self.curid = row[0]
+        logging.info("Notifications current identifier is %d" % self.curid)
 
-        while True:
-            msg = self.zmqsock.recv()
-            #
-            # Parse line.
-            msg = msg.strip()
-            if msg[0:5].lower().find("send ") == 0:
-                res = self._parse_send(msg)
-                if res == None:
-                    continue
-                expiry, devtoks, payload = res
-                sqlcur.execute('UPDATE ident SET cur=?',
-                    (curid + len(devtoks), ))
-                #
-                # Enqueue notifications.
-                ids = []
-                for devtok in devtoks:
-                    self.apnsq.put((curid, now(), expiry, devtok, payload))
-                    ids.append(str(curid))
-                    curid = curid + 1
-                self.zmqsock.send("OK %s" % ' '.join(ids))
-                continue
+        self.sqlcur = sqlcur
+        Listener.run(self)
 
-            elif msg.lower().find("feedback") == 0:
-                feedbacks = []
-                try:
-                    while True:
-                        timestamp, devtok = self.feedbackq.get_nowait()
-                        feedbacks.append("%s:%s" % (timestamp, devtok))
-                except Queue.Empty:
-                        pass
-                if len(feedbacks) == 0:
-                    self.zmqsock.send("OK")
-                else:
-                    self.zmqsock.send("OK "+ ' '.join(feedbacks))
-                continue
-
-            self._error("Invalid input", msg)
 
 
 #############################################################################
