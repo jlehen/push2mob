@@ -819,14 +819,16 @@ class GCMRegisterationIDSChanges:
     user application to update its data.
     """
 
+    _FLUSHAFTER = 10
+
     REPLACED = 1
     NOTREGISTERED = 2
     INVALID = 3
 
-    def __init__(self, sqlite, tablename, flushafter):
+    def __init__(self, sqlite, tablename):
         self.mutex = threading.Lock()
         self.tstamp = 0
-        self.flushafter = flushafter
+        self.flushafter = GCMRegisterationIDSChanges._FLUSHAFTER
 
         self.table = tablename
         self.sqlcon = sqlite3.connect(sqlite, check_same_thread = False)
@@ -1073,7 +1075,7 @@ try:
     apns_feedback_gateway = cp.get('apns', 'feedback_gateway')
     apns_feedback_freq = int(cp.get('apns', 'feedback_frequency'))
     gcm_zmq_bind = cp.get('gcm', 'zmq_bind')
-    gcm_sqlite_db = cp.get('gcm', 'sqlite_db')
+    gcm_sqlitedb = cp.get('gcm', 'sqlite_db')
     gcm_api_key = cp.get('gcm', 'api_key')
     gcm_concurrency = cp.get('gcm', 'concurrency')
 except ConfigParser.Error as e:
@@ -1140,6 +1142,9 @@ logging.info("%d notifications retrieved from persistent storage" %
     apns_pushq.qsize())
 logging.info("%d feedbacks retrieved from persistent storage" %
     apns_feedbackq.qsize())
+
+gcm_pushq = ChronologicalPersistentQueue(gcm_sqlitedb, 'notifications')
+gcm_feedbackdb = GCMRegisterationIDSChanges(gcm_sqlitedb, 'feedback')
 
 #
 # Daemonize.
