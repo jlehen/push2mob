@@ -347,11 +347,9 @@ class Listener(threading.Thread):
     _WHTSP = re.compile("\s+")
     _PLUS = re.compile(r"^\+")
 
-    def __init__(self, zmqsock, apnsq, feedbackq):
+    def __init__(self, zmqsock):
         threading.Thread.__init__(self)
         self.zmqsock = zmqsock
-        self.apnsq = apnsq
-        self.feedbackq = feedbackq
 
     def _send_error(self, msg, detail = None):
         """
@@ -710,9 +708,11 @@ class APNSListener(Listener):
 
     _PAYLOADMAXLEN = 256
 
-    def __init__(self, sqlitedb, zmqsock, apnsq, feedbackq):
-        Listener.__init__(self, zmqsock, apnsq, feedbackq)
+    def __init__(self, zmqsock, sqlitedb, pushq, feedbackq):
+        Listener.__init__(self, zmqsock)
         self.sqlitedb = sqlitedb
+        self.pushq = pushq
+        self.feedbackq = feedbackq
 
     def _parse_send(self, msg):
         arglist, devtoks, payload = Listener._parse_send(self, 1, msg)
@@ -770,7 +770,7 @@ class APNSListener(Listener):
 
         idlist = []
         for devtok in devtoks:
-            self.apnsq.put((self.curid, now(), expiry, devtok, payload))
+            self.pushq.put((self.curid, now(), expiry, devtok, payload))
             idlist.append(str(self.curid))
             self.curid = self.curid + 1
         return ' '.join(idlist)
@@ -1049,5 +1049,5 @@ t.start()
 #
 # Start APNSListener thread.
 #
-t = APNSListener(apns_sqlitedb, apns_zmqsock, apns_pushq, apns_feedbackq)
+t = APNSListener(apns_zmqsock, apns_sqlitedb, apns_pushq, apns_feedbackq)
 t.run()
