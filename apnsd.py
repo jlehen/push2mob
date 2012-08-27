@@ -917,6 +917,116 @@ class GCMRegisterationIDSChanges:
             return r
 
 
+class GCMListener(Listener):
+
+    _PAYLOADMAXLEN = 4096
+
+    def __init__(self, zmqsock, pushq, idschanges):
+        Listener.__init__(self, zmqsock)
+        self.pushq = pushq
+        self.idschanges = idschanges
+
+    def _parse_send(self, msg):
+        arglist, ids, payload = Listener._parse_send(self, 3, msg)
+
+        # Collape key (arg #1).
+        collapsekey = arglist[0]
+
+        # Check expiry (arg #2).
+        expiry = arglist[1]
+        try:
+            expiry = Listener._parse_expiry(expiry)
+        except Exception as e:
+            self._send_error("Invalid expiry value: %s" % expiry)
+            return None
+
+        # Check delayidle/nodelayidle (arg #3).
+        delayidle = arglist[2]
+        if delayidle == "delayidle":
+            delayidle = 1
+        elif delayidle == "nodelayidle":
+            delayidle = 0
+        else:
+            self._send_error("Invalid (no)delayidle value: %s" % delayidle)
+            return None
+
+        arglist = [collapsekey, expiry, delayidle]
+
+        # Check device token format.
+        goodids = []
+        for i in ids:
+            r = self.idschanges(i)
+            if r is None:
+                goodids.append(i)
+                continue
+            state, newi = r
+            if state == GCMRegisterationIDSChanges.REPLACED:
+                goodids.append(newi)
+                continue
+            elif state == GCMRegisterationIDSChanges.NOTREGISTERED:
+                # Our client didn't get feedback yet, just discard the
+                # message, it is not an error.
+                continue
+            elif state == GCMRegisterationIDSChanges.INVALID:
+                self._send_error("Invalid registeration ID: %s" % r)
+                return None
+
+        ids = goodids
+
+        # Check payload length.
+        if len(payload) > GCMListener._PAYLOADMAXLEN:
+            self._send_error("Payload too long (%d > %d)" % len(payload),
+                GCMListener._PAYLOADMAXLEN, payload)
+            return None
+
+        # Mimic parent's _parse_send() return value.
+        return (arglist, ids, payload)
+
+    def _perform_send(self, arglist, devtoks, payload):
+        collapsekey = arglist[0]
+        expiry = arglist[1]
+        delayidle = arglist[2]
+
+        i = 0
+        for devtok in devtoks:
+            self.apnsq.put((now(), collapsekey, expiry, delayidle,
+                devtok, payload))
+            i = i + 1
+        return str(i)
+
+    def _perform_feedback(self):
+        feedbacks = self.idschanges.queryAll()
+        for i in range(0, len(feedbacks) - 1):
+            t = feedbacks[i]
+            if t[1] == GCMRegisterationIDSChanges.REPLACED:
+                s = "replaced"
+            elif t[1] == GCMRegisterationIDSChanges.NOTREGISTERED:
+                s = "notregistered"
+            elif t[1] == GCMRegisterationIDSChanges.INVALID:
+                s = "invalid"
+            s = "%s:%s:%s" % (t[0], s, t[2])
+            feedbacks[i] = s
+        return ' '.join(feedbacks)
+
+    def run(self):
+        # Get current notification identifier.
+        sqlcon = sqlite3.connect(self.sqlitedb)
+        sqlcon.isolation_level = None
+        sqlcur = sqlcon.cursor()
+        sqlcur.execute('CREATE TABLE IF NOT EXISTS ' \
+            'ident(cur INTEGER PRIMARY KEY);')
+        sqlcur.execute('SELECT cur FROM ident;')
+        row = sqlcur.fetchone()
+        if row is None:
+            sqlcur.execute('INSERT INTO ident VALUES(0);')
+            row = (0,)
+        self.curid = row[0]
+        logging.info("Notifications current identifier is %d" % self.curid)
+
+        self.sqlcur = sqlcur
+        Listener.run(self)
+
+
 #############################################################################
 # Main.
 #############################################################################
