@@ -158,6 +158,15 @@ class OrderedPersistentQueue:
             """DELETE FROM %s WHERE rowid = ?;""" % self.table,
             (r[0], ))
 
+    def _qsize(self):
+        """
+        Actually reckon the number of elements in the queue.
+        """
+
+        self.sqlcur.execute("SELECT COUNT(*) FROM %s" % self.table)
+        r = self.sqlcur.fetchone()
+        return r[0]
+
     def put(self, ordering, item):
         """
         Put the item in the queue with the given ordering.
@@ -186,6 +195,14 @@ class OrderedPersistentQueue:
 
         with Locker(self.cv):
             self._ack(t)
+
+    def qsize(self):
+        """
+        Return the number of elements in the queue.
+        """
+
+        return self._qsize()
+
 
 
 class ChronologicalPersistentQueue(OrderedPersistentQueue):
@@ -839,10 +856,12 @@ class GCMRegisterationIDSChanges:
             regid VARCHAR(256) PRIMARY KEY NOT NULL,
             state INTEGER NOT NULL DEFAULT 0,
             newregid VARCHAR(256),
-            retrievetime REAL NOT NULL DEFAULT 0""" % tablename)
+            retrievetime REAL NOT NULL DEFAULT 0)""" % tablename)
         self.sqlcur.execute(
             """CREATE INDEX IF NOT EXISTS regid_retrtime ON %s (
             regid, retrievetime)""" % tablename)
+        self.sqlcur.execute(
+            """DELETE FROM %s WHERE retrievetime > 0""" % self.table)
 
     def _update(self, regid, state, newregid):
 
@@ -918,6 +937,17 @@ class GCMRegisterationIDSChanges:
             r = cur.fetchall()
             return r
 
+    def count(self):
+        """
+        Return the number of element that are in the database.
+        We don't care whether the element are going to be deleted here
+        as this method is only called upon startup.
+        """
+
+        self.sqlcur.execute("SELECT count(*) FROM %s" % self.table)
+        r = self.sqlcur.fetchone()
+        return r[0]
+     
 
 class GCMListener(Listener):
 
@@ -1138,13 +1168,17 @@ except zmq.core.error.ZMQError as e:
 #
 apns_pushq = PersistentQueue(apns_sqlitedb, 'notifications')
 apns_feedbackq = PersistentQueue(apns_sqlitedb, 'feedback')
-logging.info("%d notifications retrieved from persistent storage" %
+logging.info("%d APNS notifications retrieved from persistent storage" %
     apns_pushq.qsize())
-logging.info("%d feedbacks retrieved from persistent storage" %
+logging.info("%d APNS feedbacks retrieved from persistent storage" %
     apns_feedbackq.qsize())
 
 gcm_pushq = ChronologicalPersistentQueue(gcm_sqlitedb, 'notifications')
 gcm_feedbackdb = GCMRegisterationIDSChanges(gcm_sqlitedb, 'feedback')
+logging.info("%d GCM notifications retrieved from persistent storage" %
+    gcm_pushq.qsize())
+logging.info("%d GCM feedbacks retrieved from persistent storage" %
+    gcm_feedbackdb.count())
 
 #
 # Daemonize.
