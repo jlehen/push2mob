@@ -1163,6 +1163,16 @@ except zmq.core.error.ZMQError as e:
     print e
     sys.exit(2)
 
+logging.info("ZMQ REP socket for GCM service bound on tcp://%s" %
+    gcm_zmq_bind)
+try:
+    zmqctx_r = zmq.Context()
+    gcm_zmqsock = zmqctx_r.socket(zmq.REP)
+    gcm_zmqsock.bind("tcp://%s" % gcm_zmq_bind)
+except zmq.core.error.ZMQError as e:
+    print e
+    sys.exit(2)
+
 #
 # Create persistent queues for notifications and feedback.
 #
