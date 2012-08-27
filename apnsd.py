@@ -825,8 +825,6 @@ class GCMRegisterationIDSChanges:
 
     def __init__(self, sqlite, tablename, flushafter):
         self.mutex = threading.Lock()
-        self.regidmap = {}
-        self.prevregidmap = {}
         self.tstamp = 0
         self.flushafter = flushafter
 
@@ -834,27 +832,24 @@ class GCMRegisterationIDSChanges:
         self.sqlcon = sqlite3.connect(sqlite, check_same_thread = False)
         self.sqlcon.isolation_level = None
         self.sqlcur = self.sqlcon.cursor()
-        cur = self.sqlcur
-        cur.execute(
+        self.sqlcur.execute(
             """CREATE TABLE IF NOT EXISTS %s (
             regid VARCHAR(256) PRIMARY KEY NOT NULL,
             state INTEGER NOT NULL DEFAULT 0,
-            newregid VARCHAR(256))""" % tablename)
-
-        cur.execute('SELECT regid, state, newregid FROM %s;' % tablename)
-        while True:
-            r = cur.fetchone()
-            if r is None:
-                break
-            self.regidmap[r[0]] = (r[1], r[2])
+            newregid VARCHAR(256),
+            retrievetime REAL NOT NULL DEFAULT 0""" % tablename)
+        self.sqlcur.execute(
+            """CREATE INDEX IF NOT EXISTS regid_retrtime ON %s (
+            regid, retrievetime)""" % tablename)
 
     def _update(self, regid, state, newregid):
 
         with Locker(self.mutex):
             self.sqlcur.execute(
-                """INSERT OR REPLACE INTO %s (regid, state, newregid)
-                VALUES (?, ?, ?)""" % self.table, (regid, state, newregid))
-            self.regidmap[self.i][regid] = (state, newregid)
+                """INSERT OR REPLACE INTO %s
+                (regid, state, newregid)
+                VALUES (?, ?, ?)""" % self.table,
+                (regid, state, newregid))
 
     def replace(self, oregid, nregid):
         """
@@ -880,30 +875,45 @@ class GCMRegisterationIDSChanges:
 
     def query(self, regid):
         """
-        Return status of the requested registeration ID.
+        Return status of the requested registeration ID as a tuple
+        (state, newregid).
         """
 
         with Locker(self.mutex):
-            if self.tstamp != 0 and now() - self.tstamp >= self.flushafter:
-                self.prevregidmap = {}
+            if self.tstamp != 0 and \
+              nowmicro() - self.tstamp >= self.flushafter:
+                self.sqlcur.execute(
+                    """DELETE FROM %s
+                    WHERE retrievetime > 0
+                    AND retrievetime < ?""" % self.table,
+                    (self.tstamp, ))
                 self.tstamp = 0
 
-            r = self.regidmap.get(regid)
-            if r is None:
-                r = self.prevregidmap.get(regid)
+            self.sqlcur.execute(
+                """SELECT state, newregid FROM %s
+                WHERE regid = ? AND retrievetime = 0""" % self.table,
+                (regid, ))
+            r = self.sqlcur.fetchone()
             return r
 
     def queryAll(self):
         """
         Return the whole content of the database as a list of tuples:
         (regid, state, newregid).
+        Well, this is not truly tuples, they are row object from sqlite3
+        module, but their behaviour mimics tuples.
         """
 
         with Locker(self.mutex):
-            r = [(k, v[0], v[1]) for (k, v) in self.regidmap.iteritems()]
-            self.prevregidmap = self.regidmap
-            self.tstamp = now()
-            self.regidmap = {}
+            self.tstamp = nowmicro()
+            self.sqlcur.execute(
+                """UPDATE %s SET retrievetime WHERE retrievetime = 0""" %s,
+                self.tstamp)
+            self.sqlcur.execute(
+                """SELECT regid, state, newregid FROM %s
+                WHERE retrievetime = ?;""" % self.table,
+                (self.tstamp, ))
+            r = cur.fetchall()
             return r
 
 
