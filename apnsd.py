@@ -26,8 +26,10 @@ import Queue
 import base64
 import datetime
 import getopt
+import json
 import logging
 import os
+import pycurl
 import random
 import re
 import socket
@@ -352,6 +354,98 @@ class TLSConnectionMaker:
             time.sleep(st)
 
         return sslsock
+
+
+class HTTPResponseReceiver:
+    """
+    Parses HTTP responses (header + body) as returned by pycurl.
+    """
+
+    NEWHEADER = 1
+    INHEADER = 2
+    WAITINGNEXTBLOCK = 3
+    INBODY = 4
+
+    def __init__(self):
+        self.state = HTTPResponseReceiver.NEWHEADER
+        self.http_re = re.compile("^HTTP/1\.\d ")
+        self.lastheader = None
+        self.headers = {}
+        self.body = []
+
+    def _do_status(self, line):
+        if not self.http_re.search(line):
+            return False
+        a = line.split()
+        try:
+            status = int(a[1])
+        except TypeError as e:
+            return False
+        if status >= 300 and status < 399:
+            self.state = HTTPResponseReceiver.WAITINGNEXTBLOCK
+        else:
+            self.state = HTTPResponseReceiver.INHEADER
+            self.status = status
+        return True
+
+    def _do_header(self, line):
+        if line[0] == " " or line[0] == "\t":
+            if self.lastheader is None:
+                return False
+            line = line.strip(" \t")
+            self.headers[self.lastheaders] = \
+              self.headers[self.lastheaders] + " " + line
+            return True
+
+        (name, value) = line.split(":", 1)
+        value = value.strip(" \t")
+        if name in self.headers:
+            self.headers[name] = self.headers[name] + ", " + value
+        else:
+            self.headers[name] = value
+        self.lastheader = name
+        return True
+
+    def write(self, line):
+        line = line.rstrip("\r\n")
+        if self.state == HTTPResponseReceiver.NEWHEADER:
+            if self._do_status(line):
+                return
+            print "ERROR: HTTP status line expected: %s" % line
+            sys.exit(1)
+        if self.state == HTTPResponseReceiver.WAITINGNEXTBLOCK:
+            if len(line) == 0:
+                self.state = HTTPResponseReceiver.NEWHEADER
+                return
+            return
+        if self.state == HTTPResponseReceiver.INHEADER:
+            if len(line) == 0:
+                self.state = HTTPResponseReceiver.INBODY
+                return
+            if self._do_header(line):
+                return
+            print "ERROR: Unexpected HTTP header format"
+            sys.exist(1)
+        self.body.append(line)
+
+    def getStatus(self):
+        """
+        Return status of the HTTP request.
+        """
+        return self.status
+
+    def getHeaders(self):
+        """
+        Return a dictionnary whose keys are HTTP header names
+        and values their corresponding values.
+        """
+        return self.headers
+
+    def getBody(self):
+        """
+        Return an array of lines forming the body.
+        """
+        return self.body
 
 
 class Listener(threading.Thread):
@@ -947,7 +1041,29 @@ class GCMRegisterationIDSChanges:
         self.sqlcur.execute("SELECT count(*) FROM %s" % self.table)
         r = self.sqlcur.fetchone()
         return r[0]
-     
+
+
+class GCMHTTPRequest:
+
+    def __init__(self, server_url, api_key):
+        self.curl = pycurl.Curl()
+        self.curl.setopt(pycurl.URL, server_url)
+        self.curl.setopt(pycurl.HTTPHEADER,
+            [ "Content-Type: application/json",
+              "Authorization: key=%s" % api_key ])
+
+        self.curl.setopt(pycurl.HEADER, 1)
+        self.curl.setopt(pycurl.FOLLOWLOCATION, 1)
+        self.curl.setopt(pycurl.MAXREDIRS, 5)
+        self.curl.setopt(pycurl.POST, 1)
+
+    def send(self, jsonmsg):
+        self.resp = HTTPResponseReceiver()
+        self.curl.setopt(pycurl.WRITEFUNCTION, self.resp.write)
+        self.curl.setopt(pycurl.POSTFIELDS, jsonmsg)
+        self.curl.perform()
+        return self.resp
+
 
 class GCMListener(Listener):
 
