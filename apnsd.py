@@ -1095,6 +1095,7 @@ class GCMListener(Listener):
     enhanced notification format.
     """
 
+    _MAXNUMIDS = 1000
     _PAYLOADMAXLEN = 4096
 
     def __init__(self, zmqsock, pushq, idschanges):
@@ -1129,6 +1130,10 @@ class GCMListener(Listener):
         arglist = [collapsekey, expiry, delayidle]
 
         # Check device token format.
+        if len(ids) > GCMListener._MAXNUMIDS:
+            self._send_error("Too many registeration ids (%d > %d)" % \
+                (len(ids), GCMListener._MAXNUMIDS)
+
         goodids = []
         for i in ids:
             r = self.idschanges(i)
