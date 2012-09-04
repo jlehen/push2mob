@@ -1221,9 +1221,11 @@ try:
     apns_feedback_gateway = cp.get('apns', 'feedback_gateway')
     apns_feedback_freq = int(cp.get('apns', 'feedback_frequency'))
     gcm_zmq_bind = cp.get('gcm', 'zmq_bind')
+    gcm_server_url = cp.get('gcm', 'server_url')
     gcm_sqlitedb = cp.get('gcm', 'sqlite_db')
     gcm_api_key = cp.get('gcm', 'api_key')
-    gcm_concurrency = cp.get('gcm', 'concurrency')
+    gcm_concurrency = int(cp.get('gcm', 'concurrency'))
+    gcm_max_notif_lag = float(cp.get('gcm', 'max_notif_lag'))
 except ConfigParser.Error as e:
     logging.error("%s: %s" % (CONFIGFILE, e))
     sys.exit(1)
