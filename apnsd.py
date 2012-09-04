@@ -1188,24 +1188,6 @@ class GCMListener(Listener):
             feedbacks[i] = s
         return ' '.join(feedbacks)
 
-    def run(self):
-        # Get current notification identifier.
-        sqlcon = sqlite3.connect(self.sqlitedb)
-        sqlcon.isolation_level = None
-        sqlcur = sqlcon.cursor()
-        sqlcur.execute('CREATE TABLE IF NOT EXISTS ' \
-            'ident(cur INTEGER PRIMARY KEY);')
-        sqlcur.execute('SELECT cur FROM ident;')
-        row = sqlcur.fetchone()
-        if row is None:
-            sqlcur.execute('INSERT INTO ident VALUES(0);')
-            row = (0,)
-        self.curid = row[0]
-        logging.info("Notifications current identifier is %d" % self.curid)
-
-        self.sqlcur = sqlcur
-        Listener.run(self)
-
 
 #############################################################################
 # Main.
