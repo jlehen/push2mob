@@ -180,7 +180,8 @@ class OrderedPersistentQueue:
 
     def get(self):
         """
-        Return the next item chronologically in a timely fashion.
+        Return the next item in an ordered fashion.
+        If nothing is available right now, it waits.
         The result is a tuple with (rowid, ordering, item).
         """
 
@@ -240,6 +241,7 @@ class ChronologicalPersistentQueue(OrderedPersistentQueue):
     def get(self):
         """
         Return the next item chronologically in a timely fashion.
+        If nothing is available right now, it waits.
         The result is a tuple with (rowid, timestamp, item).
         """
 
@@ -450,9 +452,13 @@ class HTTPResponseReceiver:
 
 class Listener(threading.Thread):
     """
-    Base class for the ZMQ listening socket.  It receives commands
+    This is the base class for the ZMQ listening socket and
+    it must not be instanciated as is.  It receives commands
     from the client and either enqueues notifications or sends
     feedback upon demand.
+    There ought to be only one instance of this class for each
+    application certificate, though you can make multiple
+    listener connected to a single push/feedback queue pair.
     """
 
     _WHTSP = re.compile("\s+")
@@ -558,7 +564,9 @@ class APNSRecentNotifications:
     """
     Each instance of this class goes with one APNSAgent instance.
     It records notifications that have been recently sent by this
-    agent.
+    agent.  Notifications are only kept for a limited amount of time
+    as this record is only used for synchronous inline errors
+    returned by the APNS.
     We do not need any locking as each object is accessed by only
     one thread (APNSAgent).
     """
@@ -599,6 +607,12 @@ class APNSRecentNotifications:
 
 
 class APNSAgent(threading.Thread):
+    """
+    Each instance gets notifications from the APNS push queue
+    fed by the APNSListener instance and sends it to APNS.
+    It additionally handles almost-synchronous inline errors
+    and consequently generates special feedback entries for them.
+    """
 
     _EXTENDEDNOTIFICATION = 1
     _MAXTRIAL = 2
@@ -760,6 +774,12 @@ class APNSAgent(threading.Thread):
 
 
 class APNSFeedbackAgent(threading.Thread):
+    """
+    There ought to be only one instance of this class, at least
+    for each application certificate.
+    It periodically check the APNS feedback service and 
+    creates feedback entries for it.
+    """
 
     def __init__(self, queue, sock, gateway, frequency, tlsconnect):
         threading.Thread.__init__(self)
@@ -816,6 +836,12 @@ class APNSFeedbackAgent(threading.Thread):
 
 
 class APNSListener(Listener):
+    """
+    See the Listener class description.
+    This class additionally maintains a persistent message ID
+    in an SQLite table because it is required in the APNS
+    enhanced notification format.
+    """
 
     _PAYLOADMAXLEN = 256
 
@@ -1066,6 +1092,12 @@ class GCMHTTPRequest:
 
 
 class GCMListener(Listener):
+    """
+    See the Listener class description.
+    This class additionally maintains a persistent message ID
+    in an SQLite table because it is required in the APNS
+    enhanced notification format.
+    """
 
     _PAYLOADMAXLEN = 4096
 
