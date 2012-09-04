@@ -53,10 +53,6 @@ Options:
 
 def now():
 
-       return int(time.time())
-
-def nowmicro():
-
         return time.time()
 
 def hexdump(buf, chunklen = 16):
@@ -227,7 +223,7 @@ class ChronologicalPersistentQueue(OrderedPersistentQueue):
 
         with Locker(self.cv):
             self._put(when, item)
-            timedelta = when - nowmicro()
+            timedelta = when - now()
             if timedelta < self.__class__._NEGLIGIBLEWAIT:
                 self.cv.notify()
 
@@ -236,7 +232,7 @@ class ChronologicalPersistentQueue(OrderedPersistentQueue):
         Put the item in the queue with the timestamp set to current time.
         """
 
-        self.put(nowmicro(), item)
+        self.put(now(), item)
 
     def get(self):
         """
@@ -248,7 +244,7 @@ class ChronologicalPersistentQueue(OrderedPersistentQueue):
         with Locker(self.cv):
             r = self._pick()
             while True:
-                timedelta = r[1] - nowmicro()
+                timedelta = r[1] - now()
                 if timedelta >= self.__class__._NEGLIGIBLEWAIT:
                     self.cv.wait(timedelta)
                     continue
@@ -1022,7 +1018,7 @@ class GCMRegisterationIDSChanges:
 
         with Locker(self.mutex):
             if self.tstamp != 0 and \
-              nowmicro() - self.tstamp >= self.flushafter:
+              now() - self.tstamp >= self.flushafter:
                 self.sqlcur.execute(
                     """DELETE FROM %s
                     WHERE retrievetime > 0
@@ -1046,7 +1042,7 @@ class GCMRegisterationIDSChanges:
         """
 
         with Locker(self.mutex):
-            self.tstamp = nowmicro()
+            self.tstamp = now()
             self.sqlcur.execute(
                 """UPDATE %s SET retrievetime WHERE retrievetime = 0""" %s,
                 self.tstamp)
@@ -1230,10 +1226,10 @@ try:
     apns_devtok_format = cp.get('apns', 'device_token_format')
     apns_push_gateway = cp.get('apns', 'push_gateway')
     apns_push_concurrency = int(cp.get('apns', 'push_concurrency'))
-    apns_push_max_notif_lag = int(cp.get('apns', 'push_max_notification_lag'))
+    apns_push_max_notif_lag = float(cp.get('apns', 'push_max_notification_lag'))
     apns_push_max_error_wait = float(cp.get('apns', 'push_max_error_wait'))
     apns_feedback_gateway = cp.get('apns', 'feedback_gateway')
-    apns_feedback_freq = int(cp.get('apns', 'feedback_frequency'))
+    apns_feedback_freq = float(cp.get('apns', 'feedback_frequency'))
     gcm_zmq_bind = cp.get('gcm', 'zmq_bind')
     gcm_server_url = cp.get('gcm', 'server_url')
     gcm_sqlitedb = cp.get('gcm', 'sqlite_db')
