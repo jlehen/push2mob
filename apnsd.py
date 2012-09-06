@@ -156,6 +156,17 @@ class OrderedPersistentQueue:
             """DELETE FROM %s WHERE rowid = ?;""" % self.table,
             (r[0], ))
 
+    def _reorder(self, r, ordering):
+        """
+        Reorder an item and mark it as unused.
+        The first argument is the tuple returned by _pick().
+        This must be called with self.cv locked.
+        """
+
+        self.sqlcur.execute(
+            """UPDATE %s SET ordering = ?, inuse = 0
+            WHERE rowid = ?""" % self.table, (ordering, r[0]))
+
     def _qsize(self):
         """
         Actually reckon the number of elements in the queue.
@@ -194,6 +205,15 @@ class OrderedPersistentQueue:
 
         with Locker(self.cv):
             self._ack(t)
+
+    def reorder(self, t, ordering):
+        """
+        Reorder item in the queue with the given ordering.  The first argument
+        is the tuple returned by the get() method.
+        """
+
+        with Locker(self.cv):
+            self._reorder(t, ordering)
 
     def qsize(self):
         """
