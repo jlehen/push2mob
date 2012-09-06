@@ -932,9 +932,6 @@ class APNSListener(Listener):
                 return None
             # Store the token in base64 in the queue, text is better
             # to debug.
-            logging.debug("Got notification for device token %s, " \
-                "expiring at %d" % (base64.standard_b64encode(devtok),
-                expiry))
             goodtoks.append(base64.standard_b64encode(devtok))
         devtoks = goodtoks
 
@@ -956,6 +953,9 @@ class APNSListener(Listener):
         for devtok in devtoks:
             self.pushq.put((self.curid, now(), expiry, devtok, payload))
             idlist.append(str(self.curid))
+            logging.debug("Got notification #%d for device token %s, " \
+                "expiring at %d" % (self.curid,
+                base64.standard_b64encode(devtok), expiry))
             self.curid = self.curid + 1
         return ' '.join(idlist)
 
