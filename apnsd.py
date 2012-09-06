@@ -1167,11 +1167,11 @@ class GCMListener(Listener):
         # Check device token format.
         if len(ids) > GCMListener._MAXNUMIDS:
             self._send_error("Too many registeration ids (%d > %d)" % \
-                (len(ids), GCMListener._MAXNUMIDS)
+                (len(ids), GCMListener._MAXNUMIDS))
 
         goodids = []
         for i in ids:
-            r = self.idschanges(i)
+            r = self.idschanges.query(i)
             if r is None:
                 goodids.append(i)
                 continue
