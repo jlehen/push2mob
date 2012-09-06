@@ -93,8 +93,6 @@ class OrderedPersistentQueue:
     relies on SQLite.
     """
 
-    _NEGLIGIBLEWAIT = 0.2
-
     def __init__(self, sqlite, tablename):
         self.cv = threading.Condition()
         self.table = tablename
@@ -240,6 +238,8 @@ class ChronologicalPersistentQueue(OrderedPersistentQueue):
     database upon acknowledgement.  Upon started, all returned but
     unacknowledged are reset.
     """
+
+    _NEGLIGIBLEWAIT = 0.2
 
     def __init__(self, sqlite, tablename):
         OrderedPersistentQueue.__init__(self, sqlite, tablename)
