@@ -1274,6 +1274,8 @@ class GCMListener(Listener):
         createtime = now()
         uid = self.pushq.put(createtime, (createtime, collapsekey, expiry,
             delayidle, devtoks, payload))
+        logging.debug("GCM: Got notification #%d for %d devices, " \
+            "expiring at %d" % (uid, len(devtoks), expiry))
         return str(uid)
 
     def _perform_feedback(self):
