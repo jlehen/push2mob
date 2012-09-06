@@ -1167,7 +1167,6 @@ class GCMAgent(threading.Thread):
                     (message.uid, lag, self.maxnotiflag))
                 continue
 
-            time.sleep(5)
             # We store an absolute value but GCM wants a relative TTL.
             # Semantically this makes sense to adjust the TTL just
             # before handing the notification to the GCM service.
