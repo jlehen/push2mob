@@ -113,13 +113,15 @@ class OrderedPersistentQueue:
 
     def _put(self, ordering, item):
         """
-        Actually record in the database.
+        Actually record in the database.  Return the uid of the
+        inserted object.
         This must be called with self.cv locked.
         """
 
         self.sqlcur.execute(
             """INSERT INTO %s (ordering, data)
             VALUES(?, ?)""" % self.table, (ordering, str(item)))
+        return self.sqlcur.lastrowid
 
     def _pick(self):
         """
@@ -184,11 +186,13 @@ class OrderedPersistentQueue:
     def put(self, ordering, item):
         """
         Put the item in the queue with the given ordering.
+        Return the uid of the inserted item.
         """
 
         with Locker(self.cv):
-            self._put(ordering, item)
+            uid = self._put(ordering, item)
             self.cv.notify()
+            return uid
 
     def get(self):
         """
@@ -247,13 +251,15 @@ class ChronologicalPersistentQueue(OrderedPersistentQueue):
     def put(self, when, item):
         """
         Put the item in the queue with the given timestamp.
+        Return the uid of the inserted item.
         """
 
         with Locker(self.cv):
-            self._put(when, item)
+            uid = self._put(when, item)
             timedelta = when - now()
             if timedelta < self.__class__._NEGLIGIBLEWAIT:
                 self.cv.notify()
+            return uid
 
     def put_now(self, item):
         """
@@ -1158,9 +1164,10 @@ class GCMAgent(threading.Thread):
             if lag > self.maxnotiflag:
                 logging.info("GCM: Discarding notification %s: " \
                     "delayed by %us (max %us)" %
-                    ("XXX", lag, self.maxnotiflag))
+                    (message.uid, lag, self.maxnotiflag))
                 continue
 
+            time.sleep(5)
             # We store an absolute value but GCM wants a relative TTL.
             # Semantically this makes sense to adjust the TTL just
             # before handing the notification to the GCM service.
@@ -1168,7 +1175,7 @@ class GCMAgent(threading.Thread):
             if ttl < 1:
                 logging.info("GCM: Discarding notification %s: " \
                     "time-to-live exceeded by %us (ttl: %us)" %
-                    ("XXX", -ttl, round(expiry - creation)))
+                    (message.uid, -ttl, round(expiry - creation)))
                 continue
 
             # Build the JSON request.
@@ -1265,9 +1272,9 @@ class GCMListener(Listener):
         delayidle = arglist[2]
 
         createtime = now()
-        self.pushq.put(createtime, (createtime, collapsekey, expiry, delayidle,
-            devtoks, payload))
-        return str(len(devtoks))
+        uid = self.pushq.put(createtime, (createtime, collapsekey, expiry,
+            delayidle, devtoks, payload))
+        return str(uid)
 
     def _perform_feedback(self):
         feedbacks = self.idschanges.queryAll()
