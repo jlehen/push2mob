@@ -1193,9 +1193,9 @@ class GCMListener(Listener):
         # Check delayidle/nodelayidle (arg #3).
         delayidle = arglist[2]
         if delayidle == "delayidle":
-            delayidle = 1
+            delayidle = True
         elif delayidle == "nodelayidle":
-            delayidle = 0
+            delayidle = False
         else:
             self._send_error("Invalid (no)delayidle value: %s" % delayidle)
             return None
