@@ -78,6 +78,12 @@ class Locker:
         self.l.release()
 
 
+class AttributeHolder:
+    def __init__(self, **kwargs):
+        for k in kwargs:
+            self.__dict__[k] = kwargs[k]
+
+
 class OrderedPersistentQueue:
     """
     This is an ordered persistent queue (!).  Every object stored in this
@@ -119,8 +125,8 @@ class OrderedPersistentQueue:
 
     def _pick(self):
         """
-        Lookup next item in the database.  Returns a tuple containing
-        (rowid, ordering, item)
+        Lookup next item in the database.  Returns an object containing
+        the following attributes: uid, ordering, data.
         This must be called with self.cv locked.
         """
 
@@ -133,40 +139,40 @@ class OrderedPersistentQueue:
             if r is None:
                 self.cv.wait()
                 continue
-            return (r[0], r[1], eval(r[2]))
+            return AttributeHolder(uid=r[0], ordering=r[1], data=eval(r[2]))
 
     def _grab(self, r):
         """
         Actually record the item as being in use in the database.
-        The argument is the tuple returned by _pick().
+        The argument is the object returned by _pick().
         This must be called with self.cv locked.
         """
 
         self.sqlcur.execute(
             """UPDATE %s SET inuse = 1
-            WHERE rowid = ?;""" % self.table, (r[0], ))
+            WHERE rowid = ?;""" % self.table, (r.uid, ))
 
     def _ack(self, r):
         """
         Actually delete the item from the database.
-        The argument is the tuple returned by _pick().
+        The argument is the object returned by _pick().
         This must be called with self.cv locked.
         """
 
         self.sqlcur.execute(
             """DELETE FROM %s WHERE rowid = ?;""" % self.table,
-            (r[0], ))
+            (r.uid, ))
 
     def _reorder(self, r, ordering):
         """
         Reorder an item and mark it as unused.
-        The first argument is the tuple returned by _pick().
+        The first argument is the object returned by _pick().
         This must be called with self.cv locked.
         """
 
         self.sqlcur.execute(
             """UPDATE %s SET ordering = ?, inuse = 0
-            WHERE rowid = ?""" % self.table, (ordering, r[0]))
+            WHERE rowid = ?""" % self.table, (ordering, r.uid))
 
     def _qsize(self):
         """
@@ -190,7 +196,8 @@ class OrderedPersistentQueue:
         """
         Return the next item in an ordered fashion.
         If nothing is available right now, it waits.
-        The result is a tuple with (rowid, ordering, item).
+        The result is a object with the following attributes:
+        uid, ordering, data.
         """
 
         with Locker(self.cv):
@@ -200,7 +207,7 @@ class OrderedPersistentQueue:
 
     def ack(self, t):
         """
-        Delete item from the queue.  The argument is the tuple returned
+        Delete item from the queue.  The argument is the object returned
         by the get() method.
         """
 
@@ -210,7 +217,7 @@ class OrderedPersistentQueue:
     def reorder(self, t, ordering):
         """
         Reorder item in the queue with the given ordering.  The first argument
-        is the tuple returned by the get() method.
+        is the object returned by the get() method.
         """
 
         with Locker(self.cv):
@@ -265,7 +272,7 @@ class ChronologicalPersistentQueue(OrderedPersistentQueue):
         with Locker(self.cv):
             r = self._pick()
             while True:
-                timedelta = r[1] - now()
+                timedelta = r.ordering - now()
                 if timedelta >= self.__class__._NEGLIGIBLEWAIT:
                     self.cv.wait(timedelta)
                     continue
@@ -1136,14 +1143,14 @@ class GCMAgent(threading.Thread):
         self.feedbackdb = feedbackdb
 
     def run(self):
-        qitem = None
+        message = None
         while True:
-            if qitem is not None:
-                self.queue.ack(qitem)
+            if message is not None:
+                self.queue.ack(message)
 
-            qitem = self.queue.get()
+            message = self.queue.get()
             creation, collapsekey, expiry, delayidle, devtoks, payload = \
-                qitem[2]
+                message.data
 
             # Check notification lag.
             lag = now() - creation
