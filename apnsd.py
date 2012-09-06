@@ -770,6 +770,8 @@ class APNSAgent(threading.Thread):
                 (ident, devtokfmt(bintok), lag, payload))
             fmt = '> B II' + 'H' + str(len(bintok)) + 's' + \
                 'H' + str(len(payload)) + 's'
+            # XXX Should we check the expiry?  We provide an absolute value
+            # to APNS which may be in the past.  This is harmless though.
             binmsg = struct.pack(fmt, APNSAgent._EXTENDEDNOTIFICATION, ident,
                 expiry, len(bintok), bintok, len(payload), payload)
             hexdump(binmsg)
