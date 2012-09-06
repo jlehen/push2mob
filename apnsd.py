@@ -576,12 +576,12 @@ class Listener(threading.Thread):
                     continue
 
                 res = self._perform_send(*res)
-                _send_ok(res)
+                self._send_ok(res)
                 continue
 
             elif msg.lower().find("feedback") == 0:
                 res = self._perform_feedback()
-                _send_ok(res)
+                self._send_ok(res)
                 continue
 
             self._send_error("Invalid input", msg)
