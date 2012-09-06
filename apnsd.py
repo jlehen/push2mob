@@ -1118,11 +1118,11 @@ class GCMHTTPRequest:
         self.curl.setopt(pycurl.POST, 1)
 
     def send(self, jsonmsg):
-        self.resp = HTTPResponseReceiver()
-        self.curl.setopt(pycurl.WRITEFUNCTION, self.resp.write)
+        resp = HTTPResponseReceiver()
+        self.curl.setopt(pycurl.WRITEFUNCTION, resp.write)
         self.curl.setopt(pycurl.POSTFIELDS, jsonmsg)
         self.curl.perform()
-        return self.resp
+        return resp
 
 
 class GCMAgent(threading.Thread):
