@@ -1419,8 +1419,15 @@ t = APNSFeedbackAgent(apns_feedbackq, apns_feedback_sock,
     apns_feedback_gateway, apns_feedback_freq, apns_tlsconnect)
 t.start()
 
+for i in range(gcm_concurrency):
+    t = GCMAgent(gcm_pushq, gcm_server_url, gcm_api_key,
+        gcm_max_notif_lag, gcm_feedbackdb)
+    t.start()
+
 #
 # Start APNSListener thread.
 #
 t = APNSListener(apns_zmqsock, apns_sqlitedb, apns_pushq, apns_feedbackq)
+t.start()
+t = GCMListener(gcm_zmqsock, gcm_pushq, gcm_feedbackdb)
 t.run()
