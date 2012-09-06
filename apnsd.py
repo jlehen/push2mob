@@ -462,6 +462,7 @@ class Listener(threading.Thread):
 
     def __init__(self, zmqsock):
         threading.Thread.__init__(self)
+        self.daemon = True
         self.zmqsock = zmqsock
 
     def _send_error(self, msg, detail = None):
