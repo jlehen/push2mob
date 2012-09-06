@@ -28,6 +28,7 @@ import datetime
 import getopt
 import json
 import logging
+import math
 import os
 import pycurl
 import random
@@ -1133,7 +1134,11 @@ class GCMAgent(threading.Thread):
         self.feedbackdb = feedbackdb
 
     def run(self):
+        qitem = None
         while True:
+            if qitem is not None:
+                self.queue.ack(qitem)
+
             qitem = self.queue.get()
             creation, collapsekey, expiry, delayidle, devtoks, payload = \
                 qitem[2]
@@ -1147,18 +1152,27 @@ class GCMAgent(threading.Thread):
                     ("XXX", lag, self.maxnotiflag))
                 continue
 
+            # We store an absolute value but GCM wants a relative TTL.
+            # Semantically this makes sense to adjust the TTL just
+            # before handing the notification to the GCM service.
+            ttl = int(round(expiry - now()))
+            if ttl < 1:
+                logging.info("GCM: Discarding notification %s: " \
+                    "time-to-live exceeded by %us (ttl: %us)" %
+                    ("XXX", -ttl, round(expiry - creation)))
+                continue
+
             # Build the JSON request.
             req = {}
             req['registration_ids'] = devtoks
             req['collapse_key'] = collapsekey
             req['data'] = payload
             req['delay_while_idle'] = delayidle
-            req['time_to_live'] = expiry
+            req['time_to_live'] = ttl
             #jsonmsg = json.dumps(msg, separators=(',',':'))
             jsonmsg = json.dumps(req, indent=4, separators=(', ',': '))
 
             print jsonmsg
-            self.queue.ack(qitem)
 
 class GCMListener(Listener):
     """
