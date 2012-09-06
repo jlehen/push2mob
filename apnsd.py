@@ -495,7 +495,7 @@ class Listener(threading.Thread):
             expiry = now() + expiry
         return expiry
 
-    def _parse_send(self, nargs, msg):
+    def _parse_send_args(self, nargs, msg):
         """
         Parse the send command with a variable number of mandatory
         arguments, using the following grammar:
@@ -504,14 +504,28 @@ class Listener(threading.Thread):
         is returned, then an error message has already been issued.
         You probably want to override this method to add sanity checks.
         """
-        cmdargs = msg[5:]
-        arglist, cmdargs = re.split(APNSListener._WHTSP, cmdargs, nargs)
-        ntok, cmdargs = re.split(APNSListener._WHTSP, cmdargs, 1)
-        ntok = int(ntok)
-        l = re.split(APNSListener._WHTSP, cmdargs, ntok)
-        devlist = l[0:ntok]
-        payload = l[ntok]
+        try:
+            cmdargs = msg[5:]
+            arglist = re.split(APNSListener._WHTSP, cmdargs, nargs)
+            # Don't use pop() so we raise an IndexError exception.
+            cmdargs = arglist[nargs]
+            del arglist[nargs]
+            ntok, cmdargs = re.split(APNSListener._WHTSP, cmdargs, 1)
+            ntok = int(ntok)
+            devlist = re.split(APNSListener._WHTSP, cmdargs, ntok)
+            # Same here, but usually the payload contains whitespaces so
+            # the split will work but we will have a device token format
+            # error later.
+            payload = devlist[ntok]
+            del devlist[ntok]
+        except IndexError as e:
+            raise IndexError("wrong number of arguments")
         return (arglist, devlist, payload)
+
+    def _parse_send(self, msg):
+        """
+        Parse the send command.  You must overload this method.
+        """
 
     def _perform_send(self):
         """
@@ -849,7 +863,7 @@ class APNSListener(Listener):
         self.feedbackq = feedbackq
 
     def _parse_send(self, msg):
-        arglist, devtoks, payload = Listener._parse_send(self, 1, msg)
+        arglist, devtoks, payload = Listener._parse_send_args(self, 1, msg)
 
         # Check expiry.
         try:
@@ -894,7 +908,7 @@ class APNSListener(Listener):
                 APNSListener._PAYLOADMAXLEN, payload)
             return None
 
-        # Mimic parent's _parse_send() return value.
+        # Mimic _parse_send_args() return value.
         return (arglist, devtoks, payload)
 
     def _perform_send(self, arglist, devtoks, payload):
@@ -1105,7 +1119,7 @@ class GCMListener(Listener):
         self.idschanges = idschanges
 
     def _parse_send(self, msg):
-        arglist, ids, payload = Listener._parse_send(self, 3, msg)
+        arglist, ids, payload = Listener._parse_send_args(self, 3, msg)
 
         # Collape key (arg #1).
         collapsekey = arglist[0]
@@ -1161,7 +1175,7 @@ class GCMListener(Listener):
                 GCMListener._PAYLOADMAXLEN, payload)
             return None
 
-        # Mimic parent's _parse_send() return value.
+        # Mimic _parse_send_args() return value.
         return (arglist, ids, payload)
 
     def _perform_send(self, arglist, devtoks, payload):
