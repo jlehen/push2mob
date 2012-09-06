@@ -1273,7 +1273,7 @@ try:
     gcm_sqlitedb = cp.get('gcm', 'sqlite_db')
     gcm_api_key = cp.get('gcm', 'api_key')
     gcm_concurrency = int(cp.get('gcm', 'concurrency'))
-    gcm_max_notif_lag = float(cp.get('gcm', 'max_notif_lag'))
+    gcm_max_notif_lag = float(cp.get('gcm', 'max_notification_lag'))
 except ConfigParser.Error as e:
     logging.error("%s: %s" % (CONFIGFILE, e))
     sys.exit(1)
