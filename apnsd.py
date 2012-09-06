@@ -1122,6 +1122,44 @@ class GCMHTTPRequest:
         return self.resp
 
 
+class GCMAgent(threading.Thread):
+
+    def __init__(self, queue, server_url, api_key, maxnotiflag, feedbackdb):
+        threading.Thread.__init__(self)
+        self.daemon = True
+        self.queue = queue
+        self.gcmreq = GCMHTTPRequest(server_url, api_key)
+        self.maxnotiflag = maxnotiflag
+        self.feedbackdb = feedbackdb
+
+    def run(self):
+        while True:
+            qitem = self.queue.get()
+            creation, collapsekey, expiry, delayidle, devtoks, payload = \
+                qitem[2]
+
+            # Check notification lag.
+            lag = now() - creation
+            # XXX Identify notification by an ID
+            if lag > self.maxnotiflag:
+                logging.info("GCM: Discarding notification %s: " \
+                    "delayed by %us (max %us)" %
+                    ("XXX", lag, self.maxnotiflag))
+                continue
+
+            # Build the JSON request.
+            req = {}
+            req['registration_ids'] = devtoks
+            req['collapse_key'] = collapsekey
+            req['data'] = payload
+            req['delay_while_idle'] = delayidle
+            req['time_to_live'] = expiry
+            #jsonmsg = json.dumps(msg, separators=(',',':'))
+            jsonmsg = json.dumps(req, indent=4, separators=(', ',': '))
+
+            print jsonmsg
+            self.queue.ack(qitem)
+
 class GCMListener(Listener):
     """
     See the Listener class description.
