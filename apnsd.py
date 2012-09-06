@@ -1203,12 +1203,10 @@ class GCMListener(Listener):
         expiry = arglist[1]
         delayidle = arglist[2]
 
-        i = 0
-        for devtok in devtoks:
-            self.apnsq.put((now(), collapsekey, expiry, delayidle,
-                devtok, payload))
-            i = i + 1
-        return str(i)
+        createtime = now()
+        self.pushq.put(createtime, (createtime, collapsekey, expiry, delayidle,
+            devtoks, payload))
+        return str(len(devtoks))
 
     def _perform_feedback(self):
         feedbacks = self.idschanges.queryAll()
