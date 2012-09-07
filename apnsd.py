@@ -774,7 +774,8 @@ class APNSAgent(threading.Thread):
             if lag > self.maxnotiflag:
                 logging.info("Discarding notification #%d to %s: " \
                     "delayed by %us (max %us)" %
-                    (ident, devtokfmt(bintok), lag, self.maxnotiflag))
+                    (ident, devtokfmt(bintok), round(lag, 2),
+                     self.maxnotiflag))
                 continue
 
             # Build the binary message.
@@ -1162,9 +1163,9 @@ class GCMAgent(threading.Thread):
             lag = now() - creation
             # XXX Identify notification by an ID
             if lag > self.maxnotiflag:
-                logging.info("GCM: Discarding notification %s: " \
+                logging.info("GCM: Discarding notification : " \
                     "delayed by %us (max %us)" %
-                    (message.uid, lag, self.maxnotiflag))
+                    (message.uid, round(lag, 2), self.maxnotiflag))
                 continue
 
             # We store an absolute value but GCM wants a relative TTL.
@@ -1172,7 +1173,7 @@ class GCMAgent(threading.Thread):
             # before handing the notification to the GCM service.
             ttl = int(round(expiry - now()))
             if ttl < 1:
-                logging.info("GCM: Discarding notification %s: " \
+                logging.info("GCM: Discarding notification #%d: " \
                     "time-to-live exceeded by %us (ttl: %us)" %
                     (message.uid, -ttl, round(expiry - creation)))
                 continue
