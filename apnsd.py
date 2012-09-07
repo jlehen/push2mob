@@ -1199,6 +1199,7 @@ class GCMListener(Listener):
     """
 
     _MAXNUMIDS = 1000
+    _MAXTTL = 2419200
     _PAYLOADMAXLEN = 4096
 
     def __init__(self, zmqsock, pushq, idschanges):
@@ -1219,6 +1220,10 @@ class GCMListener(Listener):
         except Exception as e:
             self._send_error("Invalid expiry value: %s" % expiry)
             return None
+        if round(expiry - now()) > GCMListener._MAXTTL:
+            self._send_error("Expiry value too high " \
+                "(max %ds in the future): %s" %
+                (GCMListener._MAXTTL, expiry))
 
         # Check delayidle/nodelayidle (arg #3).
         delayidle = arglist[2]
