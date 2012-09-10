@@ -41,6 +41,7 @@ import struct
 import sys
 import threading
 import time
+import types
 import zmq
 
 DEVTOKLEN = 32
@@ -1264,11 +1265,23 @@ class GCMListener(Listener):
 
         ids = goodids
 
-        # Check payload length.
+        # Check payload.
         if len(payload) > GCMListener._PAYLOADMAXLEN:
             self._send_error("Payload too long (%d > %d)" % len(payload),
                 GCMListener._PAYLOADMAXLEN, payload)
             return None
+
+        try:
+            tmp = json.loads(payload)
+        except ValueError as e:
+            self._send_error("Invalid JSON payload: %s" % payload)
+            return None
+        # Python's json module accepts top-level non-list, non-array values
+        # while GCM doesn't.  Catch this here.
+        if type(tmp) is not types.ListType and type(tmp) is not types.DictType:
+            self._send_error("Invalid JSON payload: %s" % payload)
+            return None
+        payload = tmp
 
         # Mimic _parse_send_args() return value.
         return (arglist, ids, payload)
@@ -1287,7 +1300,7 @@ class GCMListener(Listener):
 
     def _perform_feedback(self):
         feedbacks = self.idschanges.queryAll()
-        for i in range(0, len(feedbacks) - 1):
+        for i in range(len(feedbacks)):
             t = feedbacks[i]
             if t[1] == GCMFeedbackDatabase.REPLACED:
                 s = "replaced"
@@ -1295,7 +1308,8 @@ class GCMListener(Listener):
                 s = "notregistered"
             elif t[1] == GCMFeedbackDatabase.INVALID:
                 s = "invalid"
-            s = "%s:%s:%s" % (t[0], s, t[2])
+            # t[0] and t[2] are unicode strings.
+            s = "%s:%s:%s" % (str(t[0]), s, str(t[2]))
             feedbacks[i] = s
         return ' '.join(feedbacks)
 
