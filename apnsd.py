@@ -336,9 +336,6 @@ class DeviceTokenFormater:
         else:
             return ''.join("%02x" % ord(c) for c in devtok)
 
-# This will be used as a function.
-devtokfmt = None
-
 
 class TLSConnectionMaker:
     """
@@ -680,11 +677,12 @@ class APNSAgent(threading.Thread):
         255: "None (unknown)"
     }
 
-    def __init__(self, queue, gateway, maxnotiflag, maxerrorwait, feedbackq,
-        tlsconnect):
+    def __init__(self, devtokfmt, queue, gateway, maxnotiflag,
+        maxerrorwait, feedbackq, tlsconnect):
 
         threading.Thread.__init__(self)
         self.daemon = True
+        self.devtokfmt = devtokfmt
         self.queue = queue
         self.gateway = gateway
         self.maxnotiflag = maxnotiflag
@@ -730,7 +728,7 @@ class APNSAgent(threading.Thread):
         if errdevtok is None:
             errdevtok = "unknown"
         else:
-            errdevtok = devtokfmt(errdevtok)
+            errdevtok = self.devtokfmt(errdevtok)
         logging.warning("Notification #%d to %s response: %s" %
             (errident, errdevtok, APNSAgent._error_responses[st]))
         if st == APNSAgent._INVALIDTOKENSTATUS:
@@ -776,14 +774,14 @@ class APNSAgent(threading.Thread):
             if lag > self.maxnotiflag:
                 logging.info("Discarding notification #%d to %s: " \
                     "delayed by %us (max %us)" %
-                    (ident, devtokfmt(bintok), round(lag, 2),
+                    (ident, self.devtokfmt(bintok), round(lag, 2),
                      self.maxnotiflag))
                 continue
 
             # Build the binary message.
             logging.debug("Sending notification #%d to %s, " \
                 "lagging by %us: %s" %
-                (ident, devtokfmt(bintok), lag, payload))
+                (ident, self.devtokfmt(bintok), lag, payload))
             fmt = '> B II' + 'H' + str(len(bintok)) + 's' + \
                 'H' + str(len(payload)) + 's'
             # XXX Should we check the expiry?  We provide an absolute value
@@ -806,12 +804,12 @@ class APNSAgent(threading.Thread):
                     trial = trial + 1
                     logging.debug("Retry (%d) to send notification "
                         "#%d to %s: %s" %
-                        (trial, ident, devtokfmt(bintok), e))
+                        (trial, ident, self.devtokfmt(bintok), e))
                     self._connect()
                     continue
             if trial == APNSAgent._MAXTRIAL:
                 logging.warning("Cannot send notification #%d to %s, "
-                    "abording" % (ident, devtokfmt(bintok)))
+                    "abording" % (ident, self.devtokfmt(bintok)))
                 continue
             self.recentnotifications.record(ident, bintok)
             logging.info("Notification #%d sent", ident)
@@ -831,10 +829,11 @@ class APNSFeedbackAgent(threading.Thread):
     creates feedback entries for it.
     """
 
-    def __init__(self, queue, sock, gateway, frequency, tlsconnect):
+    def __init__(self, devtokfmt, queue, sock, gateway, frequency, tlsconnect):
         threading.Thread.__init__(self)
         self.daemon = True
         self.sock = sock
+        self.devtokfmt = devtokfmt
         self.queue = queue
         self.gateway = gateway
         self.frequency = frequency
@@ -877,7 +876,7 @@ class APNSFeedbackAgent(threading.Thread):
                         break
                     buf = buf[self.tuplesize:]
                     ts, toklen, bintok = struct.unpack(self.fmt, bintuple)
-                    devtok = devtokfmt(bintok)
+                    devtok = self.devtokfmt(bintok)
                     ts = str(ts)
                     logging.info("New feedback tuple (%s, %s)" % (ts, devtok))
                     self.queue.put((ts, devtok))
@@ -1612,7 +1611,7 @@ if apns_devtok_format != 'base64' and apns_devtok_format != 'hex':
     logging.error("%s: Unknown device token format: %s" %
         (CONFIGFILE, apns_devtok_format))
     sys.exit(1)
-devtokfmt = DeviceTokenFormater(apns_devtok_format)
+apns_devtokfmt = DeviceTokenFormater(apns_devtok_format)
 
 #
 # Check APNS push/feedback TLS connections.
@@ -1696,11 +1695,12 @@ if len(logfile) != 0:
 # Start APNS threads and Feedback one.
 #
 for i in range(apns_push_concurrency):
-    t = APNSAgent(apns_pushq, apns_push_gateway, apns_push_max_notif_lag,
-        apns_push_max_error_wait, apns_feedbackq, apns_tlsconnect)
+    t = APNSAgent(apns_devtokfmt, apns_pushq, apns_push_gateway,
+        apns_push_max_notif_lag, apns_push_max_error_wait, apns_feedbackq,
+        apns_tlsconnect)
     t.start()
 
-t = APNSFeedbackAgent(apns_feedbackq, apns_feedback_sock,
+t = APNSFeedbackAgent(apns_devtokfmt, apns_feedbackq, apns_feedback_sock,
     apns_feedback_gateway, apns_feedback_freq, apns_tlsconnect)
 t.start()
 
