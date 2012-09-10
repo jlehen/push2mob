@@ -159,6 +159,7 @@ class OrderedPersistentQueue:
         This must be called with self.cv locked.
         """
 
+        # XXX Should we only ack grabbed items?
         self.sqlcur.execute(
             """DELETE FROM %s WHERE rowid = ?;""" % self.table,
             (r.uid, ))
@@ -994,7 +995,7 @@ class APNSListener(Listener):
 # GCM stuff.
 #############################################################################
 
-class GCMRegisterationIDSChanges:
+class GCMFeedbackDatabase:
     """
     This object records all recent changes to registeration IDs as reported
     by CGM.  A registeration ID can be replaced by a new one, not
@@ -1013,7 +1014,7 @@ class GCMRegisterationIDSChanges:
     def __init__(self, sqlite, tablename):
         self.mutex = threading.Lock()
         self.tstamp = 0
-        self.flushafter = GCMRegisterationIDSChanges._FLUSHAFTER
+        self.flushafter = GCMFeedbackDatabase._FLUSHAFTER
 
         self.table = tablename
         self.sqlcon = sqlite3.connect(sqlite, check_same_thread = False)
@@ -1045,7 +1046,7 @@ class GCMRegisterationIDSChanges:
         A new registeration ID (nregid) replaced the old one (oregid).
         """
 
-        self._update(oregid, GCMRegisterationIDSChanges.REPLACED, nregid)
+        self._update(oregid, GCMFeedbackDatabase.REPLACED, nregid)
 
     def unregister(self, regid):
         """
@@ -1053,14 +1054,14 @@ class GCMRegisterationIDSChanges:
         from device).
         """
 
-        self._update(oregid, GCMRegisterationIDSChanges.NOTREGISTERED, "")
+        self._update(regid, GCMFeedbackDatabase.NOTREGISTERED, "")
 
     def invalidate(self, regid):
         """
         The registeration ID has been pointed as invalid by the server.
         """
 
-        self._update(oregid, GCMRegisterationIDSChanges.INVALID, "")
+        self._update(oregid, GCMFeedbackDatabase.INVALID, "")
 
     def query(self, regid):
         """
@@ -1150,14 +1151,14 @@ class GCMAgent(threading.Thread):
         self.feedbackdb = feedbackdb
 
     def run(self):
-        message = None
+        gcmmsg = None
         while True:
-            if message is not None:
-                self.queue.ack(message)
+            if gcmmsg is not None:
+                self.queue.ack(gcmmsg)
 
-            message = self.queue.get()
+            gcmmsg = self.queue.get()
             creation, collapsekey, expiry, delayidle, devtoks, payload = \
-                message.data
+                gcmmsg.data
 
             # Check notification lag.
             lag = now() - creation
@@ -1165,7 +1166,7 @@ class GCMAgent(threading.Thread):
             if lag > self.maxnotiflag:
                 logging.info("GCM: Discarding notification : " \
                     "delayed by %us (max %us)" %
-                    (message.uid, round(lag, 2), self.maxnotiflag))
+                    (gcmmsg.uid, round(lag, 2), self.maxnotiflag))
                 continue
 
             # We store an absolute value but GCM wants a relative TTL.
@@ -1175,7 +1176,7 @@ class GCMAgent(threading.Thread):
             if ttl < 1:
                 logging.info("GCM: Discarding notification #%d: " \
                     "time-to-live exceeded by %us (ttl: %us)" %
-                    (message.uid, -ttl, round(expiry - creation)))
+                    (gcmmsg.uid, -ttl, round(expiry - creation)))
                 continue
 
             # Build the JSON request.
@@ -1249,14 +1250,14 @@ class GCMListener(Listener):
                 goodids.append(i)
                 continue
             state, newi = r
-            if state == GCMRegisterationIDSChanges.REPLACED:
+            if state == GCMFeedbackDatabase.REPLACED:
                 goodids.append(newi)
                 continue
-            elif state == GCMRegisterationIDSChanges.NOTREGISTERED:
+            elif state == GCMFeedbackDatabase.NOTREGISTERED:
                 # Our client didn't get feedback yet, just discard the
                 # message, it is not an error.
                 continue
-            elif state == GCMRegisterationIDSChanges.INVALID:
+            elif state == GCMFeedbackDatabase.INVALID:
                 self._send_error("Invalid registeration ID: %s" % r)
                 return None
 
@@ -1287,11 +1288,11 @@ class GCMListener(Listener):
         feedbacks = self.idschanges.queryAll()
         for i in range(0, len(feedbacks) - 1):
             t = feedbacks[i]
-            if t[1] == GCMRegisterationIDSChanges.REPLACED:
+            if t[1] == GCMFeedbackDatabase.REPLACED:
                 s = "replaced"
-            elif t[1] == GCMRegisterationIDSChanges.NOTREGISTERED:
+            elif t[1] == GCMFeedbackDatabase.NOTREGISTERED:
                 s = "notregistered"
-            elif t[1] == GCMRegisterationIDSChanges.INVALID:
+            elif t[1] == GCMFeedbackDatabase.INVALID:
                 s = "invalid"
             s = "%s:%s:%s" % (t[0], s, t[2])
             feedbacks[i] = s
@@ -1425,7 +1426,7 @@ logging.info("%d APNS feedbacks retrieved from persistent storage" %
     apns_feedbackq.qsize())
 
 gcm_pushq = ChronologicalPersistentQueue(gcm_sqlitedb, 'notifications')
-gcm_feedbackdb = GCMRegisterationIDSChanges(gcm_sqlitedb, 'feedback')
+gcm_feedbackdb = GCMFeedbackDatabase(gcm_sqlitedb, 'feedback')
 logging.info("%d GCM notifications retrieved from persistent storage" %
     gcm_pushq.qsize())
 logging.info("%d GCM feedbacks retrieved from persistent storage" %
