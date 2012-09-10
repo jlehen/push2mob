@@ -1120,6 +1120,69 @@ class GCMFeedbackDatabase:
         return r[0]
 
 
+class GCMExponentialBackoffDatabase:
+    """
+    This object implements the exponential back-off algorithm as
+    described in the following URL:
+    https://developers.google.com/google-apps/documents-list/#implementing_exponential_backoff
+    UIDs are only kept for a limited but yet quite large amount of time
+    in memory, so long running daemons won't eat too much memory.
+    This is an in-memory only database.
+    """
+
+    @staticmethod
+    def _getdelay(n, retryafter):
+        expbackoff = (2 ** n) + float(random.randint(0, 1000)) / 1000
+        return max(expbackoff, retryafter)
+
+    def __init__(self, maxretries):
+        # Compute minimum rotate time with an arbitrary Retry-After
+        # header set to 600 seconds.  And just to be sure multiply the
+        # result by 2.
+        # maxretries    rotatetime
+        # 1             1200 (20 min)
+        # 2             2400 (40 min)
+        # 5             6000 (100 min)
+        rotatetime = 0
+        for i in range(1, maxretries):
+            expbackoff = (2 ** i) + 1
+            rotatetime = max(600, expbackoff)
+        self.rotatetime = rotatetime * 2
+
+        self.maxretries = maxretries
+        self.tstamp = now()
+        self.uids = [{}, {}]
+        self.i = 0
+
+    def _rotate(self):
+        # This part should be protected by a mutex if the object was
+        # accessed by multiple threads.
+        if now() - self.tstamp >= self.rotatetime:
+            i = (self.i + 1) % 2
+            self.uids[i] = {}
+            self.i = i
+            self.tstamp = now()
+
+    def schedule(self, uid, retryafter):
+        self._rotate()
+        i0 = self.i
+        i1 = (self.i + 1) % 2
+        if uid in self.uids[i0]:
+            i = i0
+        elif uid in self.uids[i1]:
+            i = i1
+        else:
+            self.uids[i0][uid] = 0
+            return GCMExponentialBackoffDatabase._getdelay(0, retryafter)
+
+        n = self.uids[i][uid] + 1
+        if n > self.maxretries:
+            return None
+
+        self.uids[i][uid] = n
+        return GCMExponentialBackoffDatabase._getdelay(n, retryafter)
+
+
 class GCMHTTPRequest:
 
     def __init__(self, server_url, api_key):
