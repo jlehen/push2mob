@@ -1061,7 +1061,7 @@ class GCMFeedbackDatabase:
         The registeration ID has been pointed as invalid by the server.
         """
 
-        self._update(oregid, GCMFeedbackDatabase.INVALID, "")
+        self._update(regid, GCMFeedbackDatabase.INVALID, "")
 
     def query(self, regid):
         """
@@ -1097,13 +1097,14 @@ class GCMFeedbackDatabase:
         with Locker(self.mutex):
             self.tstamp = now()
             self.sqlcur.execute(
-                """UPDATE %s SET retrievetime WHERE retrievetime = 0""" %s,
-                self.tstamp)
+                """UPDATE %s SET retrievetime = ?
+                WHERE retrievetime = 0"""  % self.table,
+                (self.tstamp, ))
             self.sqlcur.execute(
                 """SELECT regid, state, newregid FROM %s
                 WHERE retrievetime = ?;""" % self.table,
                 (self.tstamp, ))
-            r = cur.fetchall()
+            r = self.sqlcur.fetchall()
             return r
 
     def count(self):
