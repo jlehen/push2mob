@@ -1207,31 +1207,60 @@ class GCMHTTPRequest:
 
 class GCMAgent(threading.Thread):
 
-    def __init__(self, queue, server_url, api_key, maxnotiflag, feedbackdb):
+    _error_strings = {
+        'MissingRegistration'   : 'Missing Registration ID',
+        'InvalidRegistration'   : 'Invalid Registration ID',    # invalidate
+        'MismatchSenderId'      : 'Mismatched Sender',          # invalidate
+        'NotRegistered'         : 'Unregistered Device',        # unregister
+        'MessageTooBig'         : 'Message Too Big',
+        'InvalidDataKey'        : 'Invalid Data Key',
+        'InvalidTtl'            : 'Invalid Time To Live',
+        'Unavailable'           : 'Timeout',                    # retry
+        'InternalServerError'   : 'Internal Server Error',      # retry
+        # Stolen from Google's gcm-server source code
+        'QuotaExceeded'         : 'Quota Exceeded',             # retry
+        'DeviceQuotaExceeded'   : 'Device Quota Exceeded',      # retry
+        'MissingCollapseKey'    : 'Missing Collapse Key'
+    }
+
+    def __init__(self, queue, server_url, api_key, maxnotiflag, min_interval,
+        dry_run, expbackoffdb, feedbackdb):
+
         threading.Thread.__init__(self)
         self.daemon = True
         self.queue = queue
         self.gcmreq = GCMHTTPRequest(server_url, api_key)
         self.maxnotiflag = maxnotiflag
+        self.mininterval = min_interval
+        self.dryrun = dry_run
+        self.expbackoffdb = expbackoffdb
         self.feedbackdb = feedbackdb
 
     def run(self):
+        needsleep = 0
         gcmmsg = None
         while True:
+            # Take care of setting gcmmsg to None if you've
+            # already ack'ed the gcmmsg or something in the loop.
             if gcmmsg is not None:
                 self.queue.ack(gcmmsg)
 
+            if needsleep:
+                time.sleep(self.mininterval)
+            needsleep = 1
+
             gcmmsg = self.queue.get()
+            uid = gcmmsg.uid
+            ordering = gcmmsg.ordering
             creation, collapsekey, expiry, delayidle, devtoks, payload = \
                 gcmmsg.data
 
             # Check notification lag.
             lag = now() - creation
-            # XXX Identify notification by an ID
             if lag > self.maxnotiflag:
-                logging.info("GCM: Discarding notification : " \
+                logging.info("GCM: Discarding notification #%d: " \
                     "delayed by %us (max %us)" %
-                    (gcmmsg.uid, round(lag, 2), self.maxnotiflag))
+                    (uid, round(lag, 2), self.maxnotiflag))
                 continue
 
             # We store an absolute value but GCM wants a relative TTL.
@@ -1241,7 +1270,7 @@ class GCMAgent(threading.Thread):
             if ttl < 1:
                 logging.info("GCM: Discarding notification #%d: " \
                     "time-to-live exceeded by %us (ttl: %us)" %
-                    (gcmmsg.uid, -ttl, round(expiry - creation)))
+                    (uid, -ttl, round(expiry - creation)))
                 continue
 
             # Build the JSON request.
@@ -1251,10 +1280,145 @@ class GCMAgent(threading.Thread):
             req['data'] = payload
             req['delay_while_idle'] = delayidle
             req['time_to_live'] = ttl
-            #jsonmsg = json.dumps(msg, separators=(',',':'))
+            if self.dryrun:
+                req['dry_run'] = True
             jsonmsg = json.dumps(req, indent=4, separators=(', ',': '))
-
             print jsonmsg
+            jsonmsg = json.dumps(req, separators=(',',':'))
+            print jsonmsg
+
+            httpresp = self.gcmreq.send(jsonmsg)
+            status = httpresp.getStatus()
+            jsonresp = '\n'.join(httpresp.getBody())
+            resphdrs = httpresp.getHeaders()
+            retryafterhdr = 0
+            try:
+                retryafterhdr = int(resphdrs['Retry-After'])
+            except KeyError as e:
+                retryafterhdr = 0
+            except ValueError as e:
+                # TODO We can handle Retry-After: being a date here.
+                retryafterhdr = 0
+
+            # First check status code.
+            if status == 200:
+                pass
+            elif status == 400:
+                logging.error("GCM: Invalid JSON in notification #%d " \
+                    "(details: %s): %s" % (uid, jsonresp, jsonmsg))
+                continue
+            elif status == 401:
+                # GCM provides a response but nothing relevant for the
+                # possible causes of this error.
+                logging.error("GCM: Authentication error for " \
+                    "notification #%d (details: %s): %s" %
+                    (uid, jsonresp, jsonmsg))
+                continue
+            elif status == 500 or status == 503:
+                delay = self.expbackoffdb.schedule(uid, retryafter)
+                if delay is None:
+                    # Just drop it.
+                    self.queue.ack(gcmmsg)
+                else:
+                    self.queue.reorder(gcmmsg, ordering + delay)
+                if status == 500:
+                    logging.error("GCM: Internal server error for " \
+                        "notification #%d, retrying in %.3fs, but this should" \
+                        "probably be reported to GCM Error body (details: %s)" %
+                        (uid, delay, jsonresp))
+                else: # status == 503
+                    logging.error("GCM: Service unavailable for " \
+                        "notification #%d, retrying in %.3fs (details: %s)" %
+                        (uid, delay, jsonresp))
+                # Don't ack the gcmmsg.  It has been handled above.
+                gcmmsg = None
+                continue
+            else:
+                logging.error("GCM: Unexpected HTTP status code %d in " \
+                    "notification #%d (details: %s): %s" %
+                    (status, uid, jsonresp, jsonmsg))
+                continue
+
+            # Now check the body.
+            try:
+                resp = json.loads(jsonresp)
+            except Exception as e:
+                logging.error("GCM: Couldn't decode JSON returned in" \
+                    "notification #%d: %s" %
+                    (uid, jsonresp))
+                continue
+
+            logging.info("GCM: Notification #%d sent as %s: " \
+                "success %d, failure %d, canonical_ids %d" %
+                (uid, resp['multicast_id'],
+                 resp['success'], resp['failure'], resp['canonical_ids']))
+            if resp['failure'] == 0 and resp['canonical_ids']:
+                continue
+
+            if len(devtoks) != len(resp['results']):
+                logging.warning("GCM: Weird number of results in " \
+                    "notification #%d (%d devices, %d results): %s" %
+                    (uid, len(devtoks), len(data['results'], jsonresp)))
+
+            devtoks2retry = []
+            for i in range(len(devtoks)):
+                devtok = devtoks[i]
+                result = resp['results'][i]
+
+                if 'message_id' in result:
+                    if 'registration_id' not in result:
+                        continue
+                    self.feedbackdb.replace(devtok, result['registration_id'])
+                    continue
+
+                try:
+                    error = result['error']
+                except KeyError as e:
+                    logging.warning("GCM: Expected 'error' in results[%d] in" \
+                        "notification #%d: %s" % (i, uid, jsonresp))
+                    continue
+
+                emsg = ""
+                try:
+                    emsg = GCMAgent._error_strings[error]
+                except KeyError as e:
+                    logging.error("GCM: Unexpected error for registration " \
+                        "ID %s in notification #%d: %s" %
+                        (devtok, uid, error))
+                    continue
+                logging.debug("GCM. %s for registration ID %s " \
+                    "in notification #%d" % (emsg, devtok, uid))
+
+                # Special actions for some errors.
+                if error == 'InvalidRegistration' or \
+                    error == 'MismatchSenderId':
+                    self.feedbackdb.invalidate(devtok)
+                elif error == 'NotRegistered':
+                    self.feedbackdb.unregister(devtok)
+                elif error == 'Unavailable' or \
+                     error == 'InternalServerError' or \
+                     error == 'QuotaExceeded' or \
+                     error == 'DeviceQuotaExceeded':
+                    devtoks2retry.append(devtok)
+
+            if len(devtoks2retry) == 0:
+                continue
+            delay = self.expbackoffdb.schedule(uid, retryafter)
+            if delay is None:
+                self.queue.ack(gcmmsg)
+                continue
+
+            if len(devtoks2retry) == len(devtoks):
+                self.queue.reorder(gcmmsg, ordering + delay)
+                continue
+
+            # Given we cannot change the data in the persistent queue and
+            # we must change the list of registration IDs, we have to ack
+            # the current one and create another one from scratch.
+            self.queue.ack(gcmmsg)
+            self.queue.put(now() + delay, (creation, collapsekey, expiry,
+                delayidle, devtoks2retry, payload))
+
 
 class GCMListener(Listener):
     """
@@ -1513,6 +1677,8 @@ logging.info("%d GCM notifications retrieved from persistent storage" %
 logging.info("%d GCM feedbacks retrieved from persistent storage" %
     gcm_feedbackdb.count())
 
+gcm_expbackoffdb = GCMExponentialBackoffDatabase(gcm_max_retries)
+
 #
 # Daemonize.
 #
@@ -1540,7 +1706,8 @@ t.start()
 
 for i in range(gcm_concurrency):
     t = GCMAgent(gcm_pushq, gcm_server_url, gcm_api_key,
-        gcm_max_notif_lag, gcm_feedbackdb)
+        gcm_max_notif_lag, gcm_min_interval, gcm_dry_run,
+        gcm_expbackoffdb, gcm_feedbackdb)
     t.start()
 
 #
