@@ -1494,14 +1494,16 @@ class GCMListener(Listener):
             if state == GCMFeedbackDatabase.REPLACED:
                 goodids.append(newi)
                 continue
-            elif state == GCMFeedbackDatabase.NOTREGISTERED:
+            elif state == GCMFeedbackDatabase.NOTREGISTERED or \
+                state == GCMFeedbackDatabase.INVALID:
                 # Our client didn't get feedback yet, just discard the
                 # message, it is not an error.
                 continue
-            elif state == GCMFeedbackDatabase.INVALID:
-                self._send_error("Invalid registration ID: %s" % i)
-                return None
 
+        if len(goodids) == 0:
+            self._send_error("All registrations IDs have been filtered out, " \
+                "please get feedback")
+            return None
         ids = goodids
 
         # Check payload.
