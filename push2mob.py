@@ -45,13 +45,13 @@ import types
 import zmq
 
 DEVTOKLEN = 32
-CONFIGFILE = 'apnsd.conf'
+CONFIGFILE = 'push2mob.conf'
 
 def usage():
-    print """Usage: apnsd.py [options]
+    print """Usage: push2mob.py [options]
 Options:
-  -c    Change configuration file (defaults to "./apnsd.conf")
-  -h    Show this help message"""
+  -c    Change configuration file (defaults to "./%s")
+  -h    Show this help message""" % CONFIGFILE
 
 def now():
 
