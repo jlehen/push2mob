@@ -1008,8 +1008,8 @@ class APNSListener(Listener):
 
 class GCMFeedbackDatabase:
     """
-    This object records all recent changes to registeration IDs as reported
-    by CGM.  A registeration ID can be replaced by a new one, not
+    This object records all recent changes to registration IDs as reported
+    by CGM.  A registration ID can be replaced by a new one, not
     registered any more or invalid.
     Each time the queryAll() method is called, the current record is marked
     for deletion in "flushafter" seconds, this gives the opportunity to the
@@ -1054,14 +1054,14 @@ class GCMFeedbackDatabase:
 
     def replace(self, oregid, nregid):
         """
-        A new registeration ID (nregid) replaced the old one (oregid).
+        A new registration ID (nregid) replaced the old one (oregid).
         """
 
         self._update(oregid, GCMFeedbackDatabase.REPLACED, nregid)
 
     def unregister(self, regid):
         """
-        The registeration ID has been unregistered (application removed
+        The registration ID has been unregistered (application removed
         from device).
         """
 
@@ -1069,14 +1069,14 @@ class GCMFeedbackDatabase:
 
     def invalidate(self, regid):
         """
-        The registeration ID has been pointed as invalid by the server.
+        The registration ID has been pointed as invalid by the server.
         """
 
         self._update(regid, GCMFeedbackDatabase.INVALID, "")
 
     def query(self, regid):
         """
-        Return status of the requested registeration ID as a tuple
+        Return status of the requested registration ID as a tuple
         (state, newregid).
         """
 
@@ -1481,7 +1481,7 @@ class GCMListener(Listener):
 
         # Check device token format.
         if len(ids) > GCMListener._MAXNUMIDS:
-            self._send_error("Too many registeration ids (%d > %d)" % \
+            self._send_error("Too many registration IDs (%d > %d)" % \
                 (len(ids), GCMListener._MAXNUMIDS))
 
         goodids = []
@@ -1499,7 +1499,7 @@ class GCMListener(Listener):
                 # message, it is not an error.
                 continue
             elif state == GCMFeedbackDatabase.INVALID:
-                self._send_error("Invalid registeration ID: %s" % i)
+                self._send_error("Invalid registration ID: %s" % i)
                 return None
 
         ids = goodids
