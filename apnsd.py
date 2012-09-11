@@ -493,10 +493,11 @@ class Listener(threading.Thread):
     _WHTSP = re.compile("\s+")
     _PLUS = re.compile(r"^\+")
 
-    def __init__(self, zmqsock):
+    def __init__(self, zmqsock, errorprefix):
         threading.Thread.__init__(self)
         self.daemon = True
         self.zmqsock = zmqsock
+        self.errorprefix = errorprefix
 
     def _send_error(self, msg, detail = None):
         """
@@ -504,10 +505,11 @@ class Listener(threading.Thread):
         If `detail' is provided, is will be shown in the daemon log.
         """
         if detail is not None:
-            fmt = msg + ": %s"
-            logging.warning(fmt, detail)
+            fmt = "%s: %s: %s"
+            logging.warning(fmt, self.errorprefix, msg, detail)
         else:
-            logging.warning(msg)
+            fmt = "%s: %s"
+            logging.warning(fmt, self.errorprefix, msg)
         self.zmqsock.send("ERROR " + msg)
 
     def _send_ok(self, res):
@@ -711,16 +713,17 @@ class APNSAgent(threading.Thread):
         try:
             buf = self.sock.recv()
         except socket.error as e:
-            logging.debug("Connection has been shut down abruptly: %s" % e)
+            logging.debug("APNS: Connection has been shut down abruptly: %s" %
+                e)
             return False
         if len(buf) == 0:
-            logging.debug("APNS closed the connection")
+            logging.debug("APNS: Remote service closed the connection")
             return False
 
         fmt = '>BBI'
         if len(buf) != struct.calcsize(fmt):
-            logging.warning("Unexpected APNS error response size: %d (!= %d)" %
-                (len(buf), struct.calcsize(fmt)))
+            logging.warning("APNS: Unexpected error response size: " \
+                "%d (!= %d)" % (len(buf), struct.calcsize(fmt)))
             return True
         # Bad...
         cmd, st, errident = struct.unpack(fmt, buf)
@@ -729,7 +732,7 @@ class APNSAgent(threading.Thread):
             errdevtok = "unknown"
         else:
             errdevtok = self.devtokfmt(errdevtok)
-        logging.warning("Notification #%d to %s response: %s" %
+        logging.warning("APNS: Notification #%d to %s response: %s" %
             (errident, errdevtok, APNSAgent._error_responses[st]))
         if st == APNSAgent._INVALIDTOKENSTATUS:
             self.feedbackq.put((0, errdevtok))
@@ -772,14 +775,14 @@ class APNSAgent(threading.Thread):
             # Check notification lag.
             lag = now() - creation
             if lag > self.maxnotiflag:
-                logging.info("Discarding notification #%d to %s: " \
+                logging.info("APNS: Discarding notification #%d to %s: " \
                     "delayed by %us (max %us)" %
                     (ident, self.devtokfmt(bintok), round(lag, 2),
                      self.maxnotiflag))
                 continue
 
             # Build the binary message.
-            logging.debug("Sending notification #%d to %s, " \
+            logging.debug("APNS: Sending notification #%d to %s, " \
                 "lagging by %us: %s" %
                 (ident, self.devtokfmt(bintok), lag, payload))
             fmt = '> B II' + 'H' + str(len(bintok)) + 's' + \
@@ -802,17 +805,17 @@ class APNSAgent(threading.Thread):
                 except socket.error as e:
                     self._processerror()
                     trial = trial + 1
-                    logging.debug("Retry (%d) to send notification "
+                    logging.debug("APNS: Retry (%d) to send notification "
                         "#%d to %s: %s" %
                         (trial, ident, self.devtokfmt(bintok), e))
                     self._connect()
                     continue
             if trial == APNSAgent._MAXTRIAL:
-                logging.warning("Cannot send notification #%d to %s, "
+                logging.warning("APNS: Cannot send notification #%d to %s, "
                     "abording" % (ident, self.devtokfmt(bintok)))
                 continue
             self.recentnotifications.record(ident, bintok)
-            logging.info("Notification #%d sent", ident)
+            logging.info("APNS: Notification #%d sent", ident)
 
             if self.maxerrorwait != 0:
                 # Receive a possible error in the preceeding message.
@@ -861,8 +864,9 @@ class APNSFeedbackAgent(threading.Thread):
                 b = self.sock.recv()
                 if len(b) == 0:
                     if len(buf) != 0:
-                        logging.warning("Unexpected trailing garbage from " \
-                            "feedback service (%d bytes remaining)" % len(buf))
+                        logging.warning("APNS: Unexpected trailing garbage " \
+                            "from feedback service (%d bytes remaining)" %
+                            len(buf))
                         hexdump(buf)
                     break
 
@@ -878,7 +882,8 @@ class APNSFeedbackAgent(threading.Thread):
                     ts, toklen, bintok = struct.unpack(self.fmt, bintuple)
                     devtok = self.devtokfmt(bintok)
                     ts = str(ts)
-                    logging.info("New feedback tuple (%s, %s)" % (ts, devtok))
+                    logging.info("APNS: New feedback tuple (%s, %s)" %
+                        (ts, devtok))
                     self.queue.put((ts, devtok))
 
             self._close()
@@ -895,7 +900,7 @@ class APNSListener(Listener):
     _PAYLOADMAXLEN = 256
 
     def __init__(self, zmqsock, sqlitedb, pushq, feedbackq):
-        Listener.__init__(self, zmqsock)
+        Listener.__init__(self, zmqsock, "APNS")
         self.sqlitedb = sqlitedb
         self.pushq = pushq
         self.feedbackq = feedbackq
@@ -929,8 +934,8 @@ class APNSListener(Listener):
                         "token: %s" % dt)
                     return None
             if len(devtok) != DEVTOKLEN:
-                self._send_error("Wrong device token length " \
-                    "(%d != %s): %s" % (len(devtok), DEVTOKLEN, dt))
+                self._send_error("Wrong device token length (%d != %s): %s" %
+                    (len(devtok), DEVTOKLEN, dt))
                 return None
             # Store the token in base64 in the queue, text is better
             # to debug.
@@ -955,7 +960,7 @@ class APNSListener(Listener):
         for devtok in devtoks:
             self.pushq.put((self.curid, now(), expiry, devtok, payload))
             idlist.append(str(self.curid))
-            logging.debug("Got notification #%d for device token %s, " \
+            logging.debug("APNS: Got notification #%d for device token %s, " \
                 "expiring at %d" % (self.curid,
                 base64.standard_b64encode(devtok), expiry))
             self.curid = self.curid + 1
@@ -984,7 +989,8 @@ class APNSListener(Listener):
             sqlcur.execute('INSERT INTO ident VALUES(0);')
             row = (0,)
         self.curid = row[0]
-        logging.info("Notifications current identifier is %d" % self.curid)
+        logging.info("APNS: Notifications current identifier is %d" %
+            self.curid)
 
         self.sqlcur = sqlcur
         Listener.run(self)
@@ -1385,7 +1391,7 @@ class GCMAgent(threading.Thread):
                         "ID %s in notification #%d: %s" %
                         (devtok, uid, error))
                     continue
-                logging.debug("GCM. %s for registration ID %s " \
+                logging.debug("GCM: %s for registration ID %s " \
                     "in notification #%d" % (emsg, devtok, uid))
 
                 # Special actions for some errors.
@@ -1432,7 +1438,7 @@ class GCMListener(Listener):
     _PAYLOADMAXLEN = 4096
 
     def __init__(self, zmqsock, pushq, idschanges):
-        Listener.__init__(self, zmqsock)
+        Listener.__init__(self, zmqsock, "GCM")
         self.pushq = pushq
         self.idschanges = idschanges
 
