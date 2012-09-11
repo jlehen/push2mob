@@ -493,9 +493,10 @@ class Listener(threading.Thread):
     _WHTSP = re.compile("\s+")
     _PLUS = re.compile(r"^\+")
 
-    def __init__(self, zmqsock, errorprefix):
+    def __init__(self, logger, zmqsock, errorprefix):
         threading.Thread.__init__(self)
         self.daemon = True
+        self.l = logger
         self.zmqsock = zmqsock
         self.errorprefix = errorprefix
 
@@ -506,10 +507,10 @@ class Listener(threading.Thread):
         """
         if detail is not None:
             fmt = "%s: %s: %s"
-            logging.warning(fmt, self.errorprefix, msg, detail)
+            self.l.warning(fmt, self.errorprefix, msg, detail)
         else:
             fmt = "%s: %s"
-            logging.warning(fmt, self.errorprefix, msg)
+            self.l.warning(fmt, self.errorprefix, msg)
         self.zmqsock.send("ERROR " + msg)
 
     def _send_ok(self, res):
@@ -679,11 +680,12 @@ class APNSAgent(threading.Thread):
         255: "None (unknown)"
     }
 
-    def __init__(self, devtokfmt, queue, gateway, maxnotiflag,
+    def __init__(self, logger, devtokfmt, queue, gateway, maxnotiflag,
         maxerrorwait, feedbackq, tlsconnect):
 
         threading.Thread.__init__(self)
         self.daemon = True
+        self.l = logger
         self.devtokfmt = devtokfmt
         self.queue = queue
         self.gateway = gateway
@@ -713,16 +715,16 @@ class APNSAgent(threading.Thread):
         try:
             buf = self.sock.recv()
         except socket.error as e:
-            logging.debug("APNS: Connection has been shut down abruptly: %s" %
+            self.l.debug("Connection has been shut down abruptly: %s" %
                 e)
             return False
         if len(buf) == 0:
-            logging.debug("APNS: Remote service closed the connection")
+            self.l.debug("Remote service closed the connection")
             return False
 
         fmt = '>BBI'
         if len(buf) != struct.calcsize(fmt):
-            logging.warning("APNS: Unexpected error response size: " \
+            self.l.warning("Unexpected error response size: " \
                 "%d (!= %d)" % (len(buf), struct.calcsize(fmt)))
             return True
         # Bad...
@@ -732,7 +734,7 @@ class APNSAgent(threading.Thread):
             errdevtok = "unknown"
         else:
             errdevtok = self.devtokfmt(errdevtok)
-        logging.warning("APNS: Notification #%d to %s response: %s" %
+        self.l.warning("Notification #%d to %s response: %s" %
             (errident, errdevtok, APNSAgent._error_responses[st]))
         if st == APNSAgent._INVALIDTOKENSTATUS:
             self.feedbackq.put((0, errdevtok))
@@ -775,14 +777,14 @@ class APNSAgent(threading.Thread):
             # Check notification lag.
             lag = now() - creation
             if lag > self.maxnotiflag:
-                logging.info("APNS: Discarding notification #%d to %s: " \
+                self.l.info("Discarding notification #%d to %s: " \
                     "delayed by %us (max %us)" %
                     (ident, self.devtokfmt(bintok), round(lag, 2),
                      self.maxnotiflag))
                 continue
 
             # Build the binary message.
-            logging.debug("APNS: Sending notification #%d to %s, " \
+            self.l.debug("Sending notification #%d to %s, " \
                 "lagging by %us: %s" %
                 (ident, self.devtokfmt(bintok), lag, payload))
             fmt = '> B II' + 'H' + str(len(bintok)) + 's' + \
@@ -805,17 +807,17 @@ class APNSAgent(threading.Thread):
                 except socket.error as e:
                     self._processerror()
                     trial = trial + 1
-                    logging.debug("APNS: Retry (%d) to send notification "
+                    self.l.debug("Retry (%d) to send notification "
                         "#%d to %s: %s" %
                         (trial, ident, self.devtokfmt(bintok), e))
                     self._connect()
                     continue
             if trial == APNSAgent._MAXTRIAL:
-                logging.warning("APNS: Cannot send notification #%d to %s, "
+                self.l.warning("Cannot send notification #%d to %s, "
                     "abording" % (ident, self.devtokfmt(bintok)))
                 continue
             self.recentnotifications.record(ident, bintok)
-            logging.info("APNS: Notification #%d sent", ident)
+            self.l.info("Notification #%d sent", ident)
 
             if self.maxerrorwait != 0:
                 # Receive a possible error in the preceeding message.
@@ -832,10 +834,12 @@ class APNSFeedbackAgent(threading.Thread):
     creates feedback entries for it.
     """
 
-    def __init__(self, devtokfmt, queue, sock, gateway, frequency, tlsconnect):
+    def __init__(self, logger, devtokfmt, queue, sock, gateway, frequency,
+        tlsconnect):
         threading.Thread.__init__(self)
         self.daemon = True
         self.sock = sock
+        self.l = logger
         self.devtokfmt = devtokfmt
         self.queue = queue
         self.gateway = gateway
@@ -864,7 +868,7 @@ class APNSFeedbackAgent(threading.Thread):
                 b = self.sock.recv()
                 if len(b) == 0:
                     if len(buf) != 0:
-                        logging.warning("APNS: Unexpected trailing garbage " \
+                        self.l.warning("Unexpected trailing garbage " \
                             "from feedback service (%d bytes remaining)" %
                             len(buf))
                         hexdump(buf)
@@ -882,7 +886,7 @@ class APNSFeedbackAgent(threading.Thread):
                     ts, toklen, bintok = struct.unpack(self.fmt, bintuple)
                     devtok = self.devtokfmt(bintok)
                     ts = str(ts)
-                    logging.info("APNS: New feedback tuple (%s, %s)" %
+                    self.l.info("New feedback tuple (%s, %s)" %
                         (ts, devtok))
                     self.queue.put((ts, devtok))
 
@@ -899,8 +903,9 @@ class APNSListener(Listener):
 
     _PAYLOADMAXLEN = 256
 
-    def __init__(self, zmqsock, sqlitedb, pushq, feedbackq):
-        Listener.__init__(self, zmqsock, "APNS")
+    def __init__(self, logger, zmqsock, sqlitedb, pushq, feedbackq):
+        Listener.__init__(self, logger, zmqsock, "APNS")
+        self.l = logger
         self.sqlitedb = sqlitedb
         self.pushq = pushq
         self.feedbackq = feedbackq
@@ -960,7 +965,7 @@ class APNSListener(Listener):
         for devtok in devtoks:
             self.pushq.put((self.curid, now(), expiry, devtok, payload))
             idlist.append(str(self.curid))
-            logging.debug("APNS: Got notification #%d for device token %s, " \
+            self.l.debug("Got notification #%d for device token %s, " \
                 "expiring at %d" % (self.curid,
                 base64.standard_b64encode(devtok), expiry))
             self.curid = self.curid + 1
@@ -989,7 +994,7 @@ class APNSListener(Listener):
             sqlcur.execute('INSERT INTO ident VALUES(0);')
             row = (0,)
         self.curid = row[0]
-        logging.info("APNS: Notifications current identifier is %d" %
+        self.l.info("Notifications current identifier is %d" %
             self.curid)
 
         self.sqlcur = sqlcur
@@ -1228,11 +1233,12 @@ class GCMAgent(threading.Thread):
         'MissingCollapseKey'    : 'Missing Collapse Key'
     }
 
-    def __init__(self, queue, server_url, api_key, maxnotiflag, min_interval,
-        dry_run, expbackoffdb, feedbackdb):
+    def __init__(self, logger, queue, server_url, api_key, maxnotiflag,
+        min_interval, dry_run, expbackoffdb, feedbackdb):
 
         threading.Thread.__init__(self)
         self.daemon = True
+        self.l = logger
         self.queue = queue
         self.gcmreq = GCMHTTPRequest(server_url, api_key)
         self.maxnotiflag = maxnotiflag
@@ -1263,7 +1269,7 @@ class GCMAgent(threading.Thread):
             # Check notification lag.
             lag = now() - creation
             if lag > self.maxnotiflag:
-                logging.info("GCM: Discarding notification #%d: " \
+                self.l.info("Discarding notification #%d: " \
                     "delayed by %us (max %us)" %
                     (uid, round(lag, 2), self.maxnotiflag))
                 continue
@@ -1273,7 +1279,7 @@ class GCMAgent(threading.Thread):
             # before handing the notification to the GCM service.
             ttl = int(round(expiry - now()))
             if ttl < 1:
-                logging.info("GCM: Discarding notification #%d: " \
+                self.l.info("Discarding notification #%d: " \
                     "time-to-live exceeded by %us (ttl: %us)" %
                     (uid, -ttl, round(expiry - creation)))
                 continue
@@ -1309,13 +1315,13 @@ class GCMAgent(threading.Thread):
             if status == 200:
                 pass
             elif status == 400:
-                logging.error("GCM: Invalid JSON in notification #%d " \
+                self.l.error("Invalid JSON in notification #%d " \
                     "(details: %s): %s" % (uid, jsonresp, jsonmsg))
                 continue
             elif status == 401:
                 # GCM provides a response but nothing relevant for the
                 # possible causes of this error.
-                logging.error("GCM: Authentication error for " \
+                self.l.error("Authentication error for " \
                     "notification #%d (details: %s): %s" %
                     (uid, jsonresp, jsonmsg))
                 continue
@@ -1327,19 +1333,19 @@ class GCMAgent(threading.Thread):
                 else:
                     self.queue.reorder(gcmmsg, ordering + delay)
                 if status == 500:
-                    logging.error("GCM: Internal server error for " \
+                    self.l.error("Internal server error for " \
                         "notification #%d, retrying in %.3fs, but this should" \
                         "probably be reported to GCM Error body (details: %s)" %
                         (uid, delay, jsonresp))
                 else: # status == 503
-                    logging.error("GCM: Service unavailable for " \
+                    self.l.error("Service unavailable for " \
                         "notification #%d, retrying in %.3fs (details: %s)" %
                         (uid, delay, jsonresp))
                 # Don't ack the gcmmsg.  It has been handled above.
                 gcmmsg = None
                 continue
             else:
-                logging.error("GCM: Unexpected HTTP status code %d in " \
+                self.l.error("Unexpected HTTP status code %d in " \
                     "notification #%d (details: %s): %s" %
                     (status, uid, jsonresp, jsonmsg))
                 continue
@@ -1348,12 +1354,12 @@ class GCMAgent(threading.Thread):
             try:
                 resp = json.loads(jsonresp)
             except Exception as e:
-                logging.error("GCM: Couldn't decode JSON returned in" \
+                self.l.error("Couldn't decode JSON returned in" \
                     "notification #%d: %s" %
                     (uid, jsonresp))
                 continue
 
-            logging.info("GCM: Notification #%d sent as %s: " \
+            self.l.info("Notification #%d sent as %s: " \
                 "success %d, failure %d, canonical_ids %d" %
                 (uid, resp['multicast_id'],
                  resp['success'], resp['failure'], resp['canonical_ids']))
@@ -1361,7 +1367,7 @@ class GCMAgent(threading.Thread):
                 continue
 
             if len(devtoks) != len(resp['results']):
-                logging.warning("GCM: Weird number of results in " \
+                self.l.warning("Weird number of results in " \
                     "notification #%d (%d devices, %d results): %s" %
                     (uid, len(devtoks), len(data['results'], jsonresp)))
 
@@ -1379,7 +1385,7 @@ class GCMAgent(threading.Thread):
                 try:
                     error = result['error']
                 except KeyError as e:
-                    logging.warning("GCM: Expected 'error' in results[%d] in" \
+                    self.l.warning("Expected 'error' in results[%d] in" \
                         "notification #%d: %s" % (i, uid, jsonresp))
                     continue
 
@@ -1387,11 +1393,11 @@ class GCMAgent(threading.Thread):
                 try:
                     emsg = GCMAgent._error_strings[error]
                 except KeyError as e:
-                    logging.error("GCM: Unexpected error for registration " \
+                    self.l.error("Unexpected error for registration " \
                         "ID %s in notification #%d: %s" %
                         (devtok, uid, error))
                     continue
-                logging.debug("GCM: %s for registration ID %s " \
+                self.l.debug("%s for registration ID %s " \
                     "in notification #%d" % (emsg, devtok, uid))
 
                 # Special actions for some errors.
@@ -1437,8 +1443,9 @@ class GCMListener(Listener):
     _MAXTTL = 2419200
     _PAYLOADMAXLEN = 4096
 
-    def __init__(self, zmqsock, pushq, idschanges):
-        Listener.__init__(self, zmqsock, "GCM")
+    def __init__(self, logger, zmqsock, pushq, idschanges):
+        Listener.__init__(self, logger, zmqsock, "GCM")
+        self.l = logger
         self.pushq = pushq
         self.idschanges = idschanges
 
@@ -1526,7 +1533,7 @@ class GCMListener(Listener):
         createtime = now()
         uid = self.pushq.put(createtime, (createtime, collapsekey, expiry,
             delayidle, devtoks, payload))
-        logging.debug("GCM: Got notification #%d for %d devices, " \
+        self.l.debug("Got notification #%d for %d devices, " \
             "expiring at %d" % (uid, len(devtoks), expiry))
         return str(uid)
 
@@ -1606,15 +1613,19 @@ except ConfigParser.Error as e:
 
 if len(logfile) == 0:
         logging.basicConfig(level=logging.DEBUG,
-            format='%(asctime)s %(message)s',
+            format='%(asctime)s %(name)s: %(message)s',
             datefmt='%Y/%m/%d %H:%M:%S')
 else:
         logging.basicConfig(filename=logfile, level=logging.DEBUG,
-            format='%(asctime)s %(message)s',
+            format='%(asctime)s %(name)s: %(message)s',
             datefmt='%Y/%m/%d %H:%M:%S')
 
+main_logger = logging.getLogger('MAIN')
+apns_logger = logging.getLogger('APNS')
+gcm_logger = logging.getLogger('GCM')
+
 if apns_devtok_format != 'base64' and apns_devtok_format != 'hex':
-    logging.error("%s: Unknown device token format: %s" %
+    main_logger.error("%s: Unknown device token format: %s" %
         (CONFIGFILE, apns_devtok_format))
     sys.exit(1)
 apns_devtokfmt = DeviceTokenFormater(apns_devtok_format)
@@ -1623,7 +1634,7 @@ apns_devtokfmt = DeviceTokenFormater(apns_devtok_format)
 # Check APNS push/feedback TLS connections.
 #
 apns_tlsconnect = TLSConnectionMaker(apns_cacerts, apns_cert, apns_key)
-logging.info("Testing APNS push gateway...")
+main_logger.info("Testing APNS push gateway...")
 l = apns_push_gateway.split(':', 2)
 apns_push_gateway = (l[0], int(l[1]))
 s = apns_tlsconnect(apns_push_gateway, 0,
@@ -1632,7 +1643,7 @@ if s is None:
     sys.exit(1)
 s.close()
 
-logging.info("Testing APNS feedback gateway...")
+main_logger.info("Testing APNS feedback gateway...")
 l = apns_feedback_gateway.split(':', 2)
 apns_feedback_gateway = (l[0], int(l[1]))
 apns_feedback_sock = apns_tlsconnect(apns_feedback_gateway, 0,
@@ -1645,7 +1656,7 @@ if apns_feedback_sock is None:
 #
 # Creation ZMQ sockets early so we don't waste other resource if it fails.
 #
-logging.info("ZMQ REP socket for APNS service bound on tcp://%s" %
+main_logger.info("ZMQ REP socket for APNS service bound on tcp://%s" %
     apns_zmq_bind)
 try:
     zmqctx_r = zmq.Context()
@@ -1655,7 +1666,7 @@ except zmq.core.error.ZMQError as e:
     print e
     sys.exit(2)
 
-logging.info("ZMQ REP socket for GCM service bound on tcp://%s" %
+main_logger.info("ZMQ REP socket for GCM service bound on tcp://%s" %
     gcm_zmq_bind)
 try:
     zmqctx_r = zmq.Context()
@@ -1670,16 +1681,16 @@ except zmq.core.error.ZMQError as e:
 #
 apns_pushq = PersistentQueue(apns_sqlitedb, 'notifications')
 apns_feedbackq = PersistentQueue(apns_sqlitedb, 'feedback')
-logging.info("%d APNS notifications retrieved from persistent storage" %
+main_logger.info("%d APNS notifications retrieved from persistent storage" %
     apns_pushq.qsize())
-logging.info("%d APNS feedbacks retrieved from persistent storage" %
+main_logger.info("%d APNS feedbacks retrieved from persistent storage" %
     apns_feedbackq.qsize())
 
 gcm_pushq = ChronologicalPersistentQueue(gcm_sqlitedb, 'notifications')
 gcm_feedbackdb = GCMFeedbackDatabase(gcm_sqlitedb, 'feedback')
-logging.info("%d GCM notifications retrieved from persistent storage" %
+main_logger.info("%d GCM notifications retrieved from persistent storage" %
     gcm_pushq.qsize())
-logging.info("%d GCM feedbacks retrieved from persistent storage" %
+main_logger.info("%d GCM feedbacks retrieved from persistent storage" %
     gcm_feedbackdb.count())
 
 gcm_expbackoffdb = GCMExponentialBackoffDatabase(gcm_max_retries)
@@ -1691,7 +1702,7 @@ if len(logfile) != 0:
     try:
         pid = os.fork()
     except OSError as e:
-        logging.error("Cannot fork: %s" % e)
+        main_logger.error("Cannot fork: %s" % e)
         sys.exit(2)
     if pid != 0:
         os._exit(0)
@@ -1701,17 +1712,18 @@ if len(logfile) != 0:
 # Start APNS threads and Feedback one.
 #
 for i in range(apns_push_concurrency):
-    t = APNSAgent(apns_devtokfmt, apns_pushq, apns_push_gateway,
+    t = APNSAgent(apns_logger, apns_devtokfmt, apns_pushq, apns_push_gateway,
         apns_push_max_notif_lag, apns_push_max_error_wait, apns_feedbackq,
         apns_tlsconnect)
     t.start()
 
-t = APNSFeedbackAgent(apns_devtokfmt, apns_feedbackq, apns_feedback_sock,
-    apns_feedback_gateway, apns_feedback_freq, apns_tlsconnect)
+t = APNSFeedbackAgent(apns_logger, apns_devtokfmt, apns_feedbackq,
+    apns_feedback_sock, apns_feedback_gateway, apns_feedback_freq,
+    apns_tlsconnect)
 t.start()
 
 for i in range(gcm_concurrency):
-    t = GCMAgent(gcm_pushq, gcm_server_url, gcm_api_key,
+    t = GCMAgent(gcm_logger, gcm_pushq, gcm_server_url, gcm_api_key,
         gcm_max_notif_lag, gcm_min_interval, gcm_dry_run,
         gcm_expbackoffdb, gcm_feedbackdb)
     t.start()
@@ -1719,7 +1731,8 @@ for i in range(gcm_concurrency):
 #
 # Start APNSListener thread.
 #
-t = APNSListener(apns_zmqsock, apns_sqlitedb, apns_pushq, apns_feedbackq)
+t = APNSListener(apns_logger, apns_zmqsock, apns_sqlitedb, apns_pushq,
+    apns_feedbackq)
 t.start()
-t = GCMListener(gcm_zmqsock, gcm_pushq, gcm_feedbackdb)
+t = GCMListener(gcm_logger, gcm_zmqsock, gcm_pushq, gcm_feedbackdb)
 t.run()
