@@ -1499,7 +1499,7 @@ class GCMListener(Listener):
                 # message, it is not an error.
                 continue
             elif state == GCMFeedbackDatabase.INVALID:
-                self._send_error("Invalid registeration ID: %s" % r)
+                self._send_error("Invalid registeration ID: %s" % i)
                 return None
 
         ids = goodids
