@@ -1626,10 +1626,14 @@ try:
     gcm_max_retries = int(cp.get('gcm', 'max_retries'))
     gcm_max_notif_lag = float(cp.get('gcm', 'max_notification_lag'))
     gcm_min_interval = float(cp.get('gcm', 'min_interval'))
-    gcm_dry_run = bool(cp.get('gcm', 'dry_run'))
+    gcm_dry_run = int(cp.get('gcm', 'dry_run'))
 except ConfigParser.Error as e:
     logging.error("%s: %s" % (CONFIGFILE, e))
     sys.exit(1)
+
+gcm_dry_run = False
+if gcm_dry_run:
+    gcm_dry_run = True
 
 if len(logfile) == 0:
         logging.basicConfig(level=logging.DEBUG,
