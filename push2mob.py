@@ -1313,7 +1313,7 @@ class GCMAgent(threading.Thread):
 
             httpresp = self.gcmreq.send(jsonmsg)
             status = httpresp.getStatus()
-            jsonresp = '\n'.join(httpresp.getBody())
+            jsonresp = ''.join(httpresp.getBody())
             resphdrs = httpresp.getHeaders()
             retryafterhdr = 0
             try:
