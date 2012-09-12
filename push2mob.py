@@ -103,6 +103,7 @@ class OrderedPersistentQueue:
         cur = self.sqlcur
         cur.execute(
             """CREATE TABLE IF NOT EXISTS %s (
+            rowid INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
             inuse INTEGER NOT NULL DEFAULT 0,
             ordering REAL NOT NULL,
             data BLOB);""" % tablename)
