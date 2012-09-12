@@ -1394,6 +1394,9 @@ class GCMAgent(threading.Thread):
                 if 'message_id' in result:
                     if 'registration_id' not in result:
                         continue
+                    self.l.info("In notification #%d, registration ID %s " \
+                        "has been replaced by %s" %
+                        (uid, devtok, result['registration_id']))
                     self.feedbackdb.replace(devtok, result['registration_id'])
                     continue
 
