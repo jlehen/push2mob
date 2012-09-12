@@ -493,12 +493,12 @@ class Listener(threading.Thread):
     _WHTSP = re.compile("\s+")
     _PLUS = re.compile(r"^\+")
 
-    def __init__(self, logger, zmqsock, errorprefix):
+    def __init__(self, idx, logger, zmqsock):
         threading.Thread.__init__(self)
+        self.name = "Listener%d" % idx
         self.daemon = True
         self.l = logger
         self.zmqsock = zmqsock
-        self.errorprefix = errorprefix
 
     def _send_error(self, msg, detail = None):
         """
@@ -506,11 +506,11 @@ class Listener(threading.Thread):
         If `detail' is provided, is will be shown in the daemon log.
         """
         if detail is not None:
-            fmt = "%s: %s: %s"
-            self.l.warning(fmt, self.errorprefix, msg, detail)
-        else:
             fmt = "%s: %s"
-            self.l.warning(fmt, self.errorprefix, msg)
+            self.l.warning(fmt, msg, detail)
+        else:
+            fmt = "%s"
+            self.l.warning(fmt, msg)
         self.zmqsock.send("ERROR " + msg)
 
     def _send_ok(self, res):
@@ -581,6 +581,7 @@ class Listener(threading.Thread):
             #
             # Parse line.
             msg = msg.strip()
+            self.l.debug("Got command: %s" % msg)
             if msg[0:5].lower().find("send ") == 0:
                 try:
                     res = self._parse_send(msg)
@@ -680,10 +681,11 @@ class APNSAgent(threading.Thread):
         255: "None (unknown)"
     }
 
-    def __init__(self, logger, devtokfmt, queue, gateway, maxnotiflag,
+    def __init__(self, idx, logger, devtokfmt, queue, gateway, maxnotiflag,
         maxerrorwait, feedbackq, tlsconnect):
 
         threading.Thread.__init__(self)
+        self.name = "Agent%d" % idx
         self.daemon = True
         self.l = logger
         self.devtokfmt = devtokfmt
@@ -715,8 +717,7 @@ class APNSAgent(threading.Thread):
         try:
             buf = self.sock.recv()
         except socket.error as e:
-            self.l.debug("Connection has been shut down abruptly: %s" %
-                e)
+            self.l.debug("Connection has been shut down abruptly: %s" % e)
             return False
         if len(buf) == 0:
             self.l.debug("Remote service closed the connection")
@@ -724,7 +725,7 @@ class APNSAgent(threading.Thread):
 
         fmt = '>BBI'
         if len(buf) != struct.calcsize(fmt):
-            self.l.warning("Unexpected error response size: " \
+            self.l.error("Unexpected error response size: " \
                 "%d (!= %d)" % (len(buf), struct.calcsize(fmt)))
             return True
         # Bad...
@@ -734,10 +735,19 @@ class APNSAgent(threading.Thread):
             errdevtok = "unknown"
         else:
             errdevtok = self.devtokfmt(errdevtok)
-        self.l.warning("Notification #%d to %s response: %s" %
-            (errident, errdevtok, APNSAgent._error_responses[st]))
         if st == APNSAgent._INVALIDTOKENSTATUS:
             self.feedbackq.put((0, errdevtok))
+            self.l.info("Notification #%d to %s response: %s" %
+                (errident, errdevtok, APNSAgent._error_responses[st]))
+        else:
+            estr = APNSAgent._error_responses.get(st)
+            if estr is None:
+                self.l.error("Unexpected error code %d in notification #%d " \
+                    "to %s response" % (st, errident, errdevtok))
+            else:
+                self.l.warning("Notification #%d to %s response: %s" %
+                    (errident, errdevtok, estr))
+
         return True
 
     def _processerror(self):
@@ -834,9 +844,10 @@ class APNSFeedbackAgent(threading.Thread):
     creates feedback entries for it.
     """
 
-    def __init__(self, logger, devtokfmt, queue, sock, gateway, frequency,
+    def __init__(self, idx, logger, devtokfmt, queue, sock, gateway, frequency,
         tlsconnect):
         threading.Thread.__init__(self)
+        self.name = "Feedback%d" % idx
         self.daemon = True
         self.sock = sock
         self.l = logger
@@ -903,8 +914,8 @@ class APNSListener(Listener):
 
     _PAYLOADMAXLEN = 256
 
-    def __init__(self, logger, zmqsock, sqlitedb, pushq, feedbackq):
-        Listener.__init__(self, logger, zmqsock, "APNS")
+    def __init__(self, idx, logger, zmqsock, sqlitedb, pushq, feedbackq):
+        Listener.__init__(self, idx, logger, zmqsock)
         self.l = logger
         self.sqlitedb = sqlitedb
         self.pushq = pushq
@@ -1233,10 +1244,11 @@ class GCMAgent(threading.Thread):
         'MissingCollapseKey'    : 'Missing Collapse Key'
     }
 
-    def __init__(self, logger, queue, server_url, api_key, maxnotiflag,
+    def __init__(self, idx, logger, queue, server_url, api_key, maxnotiflag,
         min_interval, dry_run, expbackoffdb, feedbackdb):
 
         threading.Thread.__init__(self)
+        self.name = "Agent%d" % idx
         self.daemon = True
         self.l = logger
         self.queue = queue
@@ -1332,13 +1344,15 @@ class GCMAgent(threading.Thread):
                     self.queue.ack(gcmmsg)
                 else:
                     self.queue.reorder(gcmmsg, ordering + delay)
+                # These errors happen from time to time, they are not
+                # strictly errors, so just issue warnings.
                 if status == 500:
-                    self.l.error("Internal server error for " \
+                    self.l.warning("Internal server error for " \
                         "notification #%d, retrying in %.3fs, but this should" \
                         "probably be reported to GCM Error body (details: %s)" %
                         (uid, delay, jsonresp))
                 else: # status == 503
-                    self.l.error("Service unavailable for " \
+                    self.l.warning("Service unavailable for " \
                         "notification #%d, retrying in %.3fs (details: %s)" %
                         (uid, delay, jsonresp))
                 # Don't ack the gcmmsg.  It has been handled above.
@@ -1397,7 +1411,7 @@ class GCMAgent(threading.Thread):
                         "ID %s in notification #%d: %s" %
                         (devtok, uid, error))
                     continue
-                self.l.debug("%s for registration ID %s " \
+                self.l.info("%s for registration ID %s " \
                     "in notification #%d" % (emsg, devtok, uid))
 
                 # Special actions for some errors.
@@ -1443,8 +1457,8 @@ class GCMListener(Listener):
     _MAXTTL = 2419200
     _PAYLOADMAXLEN = 4096
 
-    def __init__(self, logger, zmqsock, pushq, idschanges):
-        Listener.__init__(self, logger, zmqsock, "GCM")
+    def __init__(self, idx, logger, zmqsock, pushq, idschanges):
+        Listener.__init__(self, idx, logger, zmqsock)
         self.l = logger
         self.pushq = pushq
         self.idschanges = idschanges
@@ -1615,11 +1629,11 @@ except ConfigParser.Error as e:
 
 if len(logfile) == 0:
         logging.basicConfig(level=logging.DEBUG,
-            format='%(asctime)s %(name)s: %(message)s',
+            format='%(asctime)s %(name)s/%(threadName)s: %(message)s',
             datefmt='%Y/%m/%d %H:%M:%S')
 else:
         logging.basicConfig(filename=logfile, level=logging.DEBUG,
-            format='%(asctime)s %(name)s: %(message)s',
+            format='%(asctime)s %(name)s/%(threadName)s: %(message)s',
             datefmt='%Y/%m/%d %H:%M:%S')
 
 main_logger = logging.getLogger('MAIN')
@@ -1711,30 +1725,30 @@ if len(logfile) != 0:
     os.setsid()
 
 #
-# Start APNS threads and Feedback one.
+# Start APNS ang GCM agent threads and APNS feedback one.
 #
 for i in range(apns_push_concurrency):
-    t = APNSAgent(apns_logger, apns_devtokfmt, apns_pushq, apns_push_gateway,
+    t = APNSAgent(i, apns_logger, apns_devtokfmt, apns_pushq, apns_push_gateway,
         apns_push_max_notif_lag, apns_push_max_error_wait, apns_feedbackq,
         apns_tlsconnect)
     t.start()
 
-t = APNSFeedbackAgent(apns_logger, apns_devtokfmt, apns_feedbackq,
+t = APNSFeedbackAgent(0, apns_logger, apns_devtokfmt, apns_feedbackq,
     apns_feedback_sock, apns_feedback_gateway, apns_feedback_freq,
     apns_tlsconnect)
 t.start()
 
 for i in range(gcm_concurrency):
-    t = GCMAgent(gcm_logger, gcm_pushq, gcm_server_url, gcm_api_key,
+    t = GCMAgent(i, gcm_logger, gcm_pushq, gcm_server_url, gcm_api_key,
         gcm_max_notif_lag, gcm_min_interval, gcm_dry_run,
         gcm_expbackoffdb, gcm_feedbackdb)
     t.start()
 
 #
-# Start APNSListener thread.
+# Start APNSListener and GCMListener threads.
 #
-t = APNSListener(apns_logger, apns_zmqsock, apns_sqlitedb, apns_pushq,
+t = APNSListener(0, apns_logger, apns_zmqsock, apns_sqlitedb, apns_pushq,
     apns_feedbackq)
 t.start()
-t = GCMListener(gcm_logger, gcm_zmqsock, gcm_pushq, gcm_feedbackdb)
+t = GCMListener(0, gcm_logger, gcm_zmqsock, gcm_pushq, gcm_feedbackdb)
 t.run()
