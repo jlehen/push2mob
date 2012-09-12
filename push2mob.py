@@ -1378,7 +1378,7 @@ class GCMAgent(threading.Thread):
                 "success %d, failure %d, canonical_ids %d" %
                 (uid, resp['multicast_id'],
                  resp['success'], resp['failure'], resp['canonical_ids']))
-            if resp['failure'] == 0 and resp['canonical_ids']:
+            if resp['failure'] == 0 and resp['canonical_ids'] == 0:
                 continue
 
             if len(devtoks) != len(resp['results']):
