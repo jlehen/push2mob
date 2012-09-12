@@ -1759,4 +1759,5 @@ t = APNSListener(0, apns_logger, apns_zmqsock, apns_sqlitedb, apns_pushq,
     apns_feedbackq)
 t.start()
 t = GCMListener(0, gcm_logger, gcm_zmqsock, gcm_pushq, gcm_feedbackdb)
+# XXX Fix this.
 t.run()
