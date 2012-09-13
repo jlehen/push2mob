@@ -1052,8 +1052,6 @@ class GCMFeedbackDatabase:
         self.sqlcur.execute(
             """CREATE INDEX IF NOT EXISTS regid_retrtime ON %s (
             regid, retrievetime)""" % tablename)
-        self.sqlcur.execute(
-            """DELETE FROM %s WHERE retrievetime > 0""" % self.table)
 
     def _update(self, regid, state, newregid):
 
@@ -1093,19 +1091,16 @@ class GCMFeedbackDatabase:
         """
 
         with Locker(self.mutex):
-            if self.tstamp != 0 and \
-              now() - self.tstamp >= self.flushafter:
-                self.sqlcur.execute(
-                    """DELETE FROM %s
-                    WHERE retrievetime > 0
-                    AND retrievetime < ?""" % self.table,
-                    (self.tstamp, ))
-                self.tstamp = 0
-
+            # Look up only entries which have not been retrieved by the
+            # "feedback" command (= 0) and those that have been retrieved
+            # very recently (less than `flushafter' seconds) because we
+            # consider the application may not have finished to handle them
+            # completely yet.
             self.sqlcur.execute(
                 """SELECT state, newregid FROM %s
-                WHERE regid = ? AND retrievetime = 0""" % self.table,
-                (regid, ))
+                WHERE regid = ?
+                AND (retrievetime == 0 OR retrievetime > ?)""" % self.table,
+                (regid, now() - self.flushafter))
             r = self.sqlcur.fetchone()
             return r
 
@@ -1118,6 +1113,14 @@ class GCMFeedbackDatabase:
         """
 
         with Locker(self.mutex):
+            if self.tstamp != 0 and \
+              now() - self.tstamp >= self.flushafter:
+                self.sqlcur.execute(
+                    """DELETE FROM %s
+                    WHERE retrievetime > 0
+                    AND retrievetime <= ?""" % self.table,
+                    (self.tstamp, ))
+
             self.tstamp = now()
             self.sqlcur.execute(
                 """UPDATE %s SET retrievetime = ?
