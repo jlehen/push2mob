@@ -549,13 +549,13 @@ class Listener(threading.Thread):
         """
         try:
             cmdargs = msg[5:]
-            arglist = re.split(APNSListener._WHTSP, cmdargs, nargs)
+            arglist = re.split(Listener._WHTSP, cmdargs, nargs)
             # Don't use pop() so we raise an IndexError exception.
             cmdargs = arglist[nargs]
             del arglist[nargs]
-            ntok, cmdargs = re.split(APNSListener._WHTSP, cmdargs, 1)
+            ntok, cmdargs = re.split(Listener._WHTSP, cmdargs, 1)
             ntok = int(ntok)
-            devlist = re.split(APNSListener._WHTSP, cmdargs, ntok)
+            devlist = re.split(Listener._WHTSP, cmdargs, ntok)
             # Same here, but usually the payload contains whitespaces so
             # the split will work but we will have a device token format
             # error later.
