@@ -312,39 +312,23 @@ class ChronologicalPersistentQueue(OrderedPersistentQueue):
             return r
 
 
-class PersistentQueue(Queue.Queue):
+class PersistentFIFO(OrderedPersistentQueue):
     """
-    This class has the same interface as threading.Queue except that
-    it also stores persistently the data it holds into an SQLite database.
+    This class is a very simple persistent (on-disk) FIFO queue.
+    There is no need to ack the retrieved objects.
     """
 
     def __init__(self, sqlite, tablename):
-        Queue.Queue.__init__(self)
+        OrderedPersistentQueue.__init__(self, sqlite, tablename)
 
-        self.table = tablename
-        self.sqlcon = sqlite3.connect(sqlite, check_same_thread = False)
-        self.sqlcon.isolation_level = None
-        self.sqlcur = self.sqlcon.cursor()
-        cur = self.sqlcur
-        cur.execute('CREATE TABLE IF NOT EXISTS %s(data BLOB);' % tablename)
-        cur.execute('SELECT rowid, data FROM %s ORDER BY rowid;' % tablename)
-        while True:
-            row = cur.fetchone()
-            if row is None:
-                break
-            self.queue.append((row[0], eval(row[1])))
+    def put(self, item):
+        OrderedPersistentQueue.put(self, now(), item)
 
-    def _put(self, item):
-        self.sqlcur.execute('INSERT INTO %s(data) VALUES(?)' %
-            self.table, (str(item),))
-        rowid = self.sqlcur.lastrowid
-        self.queue.append((rowid, item))
-
-    def _get(self):
-        r = self.queue.popleft()
-        self.sqlcur.execute('DELETE FROM %s WHERE rowid=?' % self.table,
-            (r[0],))
-        return r[1]
+    def get(self, timeout=None):
+        r = OrderedPersistentQueue.get(self, timeout)
+        if r is not None:
+            self._sqlack(r)
+        return r
 
 
 class DeviceTokenFormater:
@@ -790,8 +774,8 @@ class APNSAgent(threading.Thread):
             else:
                 timeout = 1
             try:
-                ident, creation, expiry, devtok, payload = \
-                    self.queue.get(True, timeout)
+                apnsmsg = self.queue.get(timeout)
+                ident, creation, expiry, devtok, payload = apnsmsg.data
             except Queue.Empty as e:
                 triple = select.select([self.sock], [], [], 0)
                 if len(triple[0]) != 0:
@@ -1007,12 +991,12 @@ class APNSListener(Listener):
 
     def _perform_feedback(self):
         feedbacks = []
-        try:
-            while True:
-                timestamp, devtok = self.feedbackq.get_nowait()
-                feedbacks.append("%s:%s" % (timestamp, devtok))
-        except Queue.Empty:
-                pass
+        while True:
+            qobj = self.feedbackq.get(0)
+            if qobj is None:
+                break
+            timestamp, devtok = qobj.data
+            feedbacks.append("%s:%s" % (timestamp, devtok))
         return ' '.join(feedbacks)
 
     def run(self):
@@ -1728,8 +1712,8 @@ except zmq.core.error.ZMQError as e:
 #
 # Create persistent queues for notifications and feedback.
 #
-apns_pushq = PersistentQueue(apns_sqlitedb, 'notifications')
-apns_feedbackq = PersistentQueue(apns_sqlitedb, 'feedback')
+apns_pushq = PersistentFIFO(apns_sqlitedb, 'notifications')
+apns_feedbackq = PersistentFIFO(apns_sqlitedb, 'feedback')
 main_logger.info("%d APNS notifications retrieved from persistent storage" %
     apns_pushq.qsize())
 main_logger.info("%d APNS feedbacks retrieved from persistent storage" %
