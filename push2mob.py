@@ -688,7 +688,7 @@ class APNSAgent(threading.Thread):
         255: "None (unknown)"
     }
 
-    def __init__(self, idx, logger, devtokfmt, queue, gateway, maxnotiflag,
+    def __init__(self, idx, logger, devtokfmt, pushq, gateway, maxnotiflag,
         maxerrorwait, feedbackq, tlsconnect):
 
         threading.Thread.__init__(self)
@@ -696,7 +696,7 @@ class APNSAgent(threading.Thread):
         self.daemon = True
         self.l = logger
         self.devtokfmt = devtokfmt
-        self.queue = queue
+        self.pushq = pushq
         self.gateway = gateway
         self.maxnotiflag = maxnotiflag
         self.maxerrorwait = maxerrorwait
@@ -774,7 +774,7 @@ class APNSAgent(threading.Thread):
             else:
                 timeout = 1
             try:
-                apnsmsg = self.queue.get(timeout)
+                apnsmsg = self.pushq.get(timeout)
                 ident, creation, expiry, devtok, payload = apnsmsg.data
             except Queue.Empty as e:
                 triple = select.select([self.sock], [], [], 0)
@@ -851,7 +851,7 @@ class APNSFeedbackAgent(threading.Thread):
     creates feedback entries for it.
     """
 
-    def __init__(self, idx, logger, devtokfmt, queue, sock, gateway, frequency,
+    def __init__(self, idx, logger, devtokfmt, feedbackq, sock, gateway, frequency,
         tlsconnect):
         threading.Thread.__init__(self)
         self.name = "Feedback%d" % idx
@@ -859,7 +859,7 @@ class APNSFeedbackAgent(threading.Thread):
         self.sock = sock
         self.l = logger
         self.devtokfmt = devtokfmt
-        self.queue = queue
+        self.feedbackq = feedbackq
         self.gateway = gateway
         self.frequency = frequency
         self.tlsconnect = tlsconnect
@@ -906,7 +906,7 @@ class APNSFeedbackAgent(threading.Thread):
                     ts = str(ts)
                     self.l.info("New feedback tuple (%s, %s)" %
                         (ts, devtok))
-                    self.queue.put((ts, devtok))
+                    self.feedbackq.put((ts, devtok))
 
             self._close()
 
@@ -1254,14 +1254,14 @@ class GCMAgent(threading.Thread):
         'MissingCollapseKey'    : 'Missing Collapse Key'
     }
 
-    def __init__(self, idx, logger, queue, server_url, api_key, maxnotiflag,
+    def __init__(self, idx, logger, pushq, server_url, api_key, maxnotiflag,
         min_interval, dry_run, expbackoffdb, feedbackdb):
 
         threading.Thread.__init__(self)
         self.name = "Agent%d" % idx
         self.daemon = True
         self.l = logger
-        self.queue = queue
+        self.pushq = pushq
         self.gcmreq = GCMHTTPRequest(server_url, api_key)
         self.maxnotiflag = maxnotiflag
         self.mininterval = min_interval
@@ -1276,13 +1276,13 @@ class GCMAgent(threading.Thread):
             # Take care of setting gcmmsg to None if you've
             # already ack'ed the gcmmsg or something in the loop.
             if gcmmsg is not None:
-                self.queue.ack(gcmmsg)
+                self.pushq.ack(gcmmsg)
 
             if needsleep:
                 time.sleep(self.mininterval)
             needsleep = 1
 
-            gcmmsg = self.queue.get()
+            gcmmsg = self.pushq.get()
             uid = gcmmsg.uid
             ordering = gcmmsg.ordering
             creation, collapsekey, expiry, delayidle, devtoks, payload = \
@@ -1351,9 +1351,9 @@ class GCMAgent(threading.Thread):
                 delay = self.expbackoffdb.schedule(uid, retryafter)
                 if delay is None:
                     # Just drop it.
-                    self.queue.ack(gcmmsg)
+                    self.pushq.ack(gcmmsg)
                 else:
-                    self.queue.reorder(gcmmsg, ordering + delay)
+                    self.pushq.reorder(gcmmsg, ordering + delay)
                 # These errors happen from time to time, they are not
                 # strictly errors, so just issue warnings.
                 if status == 500:
@@ -1443,18 +1443,18 @@ class GCMAgent(threading.Thread):
                 continue
             delay = self.expbackoffdb.schedule(uid, retryafter)
             if delay is None:
-                self.queue.ack(gcmmsg)
+                self.pushq.ack(gcmmsg)
                 continue
 
             if len(devtoks2retry) == len(devtoks):
-                self.queue.reorder(gcmmsg, ordering + delay)
+                self.pushq.reorder(gcmmsg, ordering + delay)
                 continue
 
             # Given we cannot change the data in the persistent queue and
             # we must change the list of registration IDs, we have to ack
             # the current one and create another one from scratch.
-            self.queue.ack(gcmmsg)
-            self.queue.put(now() + delay, (creation, collapsekey, expiry,
+            self.pushq.ack(gcmmsg)
+            self.pushq.put(now() + delay, (creation, collapsekey, expiry,
                 delayidle, devtoks2retry, payload))
 
 
