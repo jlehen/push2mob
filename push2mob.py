@@ -776,7 +776,8 @@ class APNSAgent(threading.Thread):
                 timeout = 1
             try:
                 apnsmsg = self.pushq.get(timeout)
-                ident, creation, expiry, devtok, payload = apnsmsg.data
+                uid = apnsmsg.uid
+                creation, expiry, devtok, payload = apnsmsg.data
             except Queue.Empty as e:
                 triple = select.select([self.sock], [], [], 0)
                 if len(triple[0]) != 0:
@@ -797,19 +798,19 @@ class APNSAgent(threading.Thread):
             if lag > self.maxnotiflag:
                 self.l.info("Discarding notification #%d to %s: " \
                     "delayed by %us (max %us)" %
-                    (ident, self.devtokfmt(bintok), round(lag, 2),
+                    (uid, self.devtokfmt(bintok), round(lag, 2),
                      self.maxnotiflag))
                 continue
 
             # Build the binary message.
             self.l.debug("Sending notification #%d to %s, " \
                 "lagging by %us: %s" %
-                (ident, self.devtokfmt(bintok), lag, payload))
+                (uid, self.devtokfmt(bintok), lag, payload))
             fmt = '> B II' + 'H' + str(len(bintok)) + 's' + \
                 'H' + str(len(payload)) + 's'
             # XXX Should we check the expiry?  We provide an absolute value
             # to APNS which may be in the past.  This is harmless though.
-            binmsg = struct.pack(fmt, APNSAgent._EXTENDEDNOTIFICATION, ident,
+            binmsg = struct.pack(fmt, APNSAgent._EXTENDEDNOTIFICATION, uid,
                 expiry, len(bintok), bintok, len(payload), payload)
             hexdump(binmsg)
             
@@ -827,15 +828,15 @@ class APNSAgent(threading.Thread):
                     trial = trial + 1
                     self.l.debug("Retry (%d) to send notification "
                         "#%d to %s: %s" %
-                        (trial, ident, self.devtokfmt(bintok), e))
+                        (trial, uid, self.devtokfmt(bintok), e))
                     self._connect()
                     continue
             if trial == APNSAgent._MAXTRIAL:
                 self.l.warning("Cannot send notification #%d to %s, "
-                    "abording" % (ident, self.devtokfmt(bintok)))
+                    "abording" % (uid, self.devtokfmt(bintok)))
                 continue
-            self.recentnotifications.record(ident, bintok)
-            self.l.info("Notification #%d sent", ident)
+            self.recentnotifications.record(uid, bintok)
+            self.l.info("Notification #%d sent", uid)
 
             if self.maxerrorwait != 0:
                 # Receive a possible error in the preceeding message.
@@ -922,10 +923,9 @@ class APNSListener(Listener):
 
     _PAYLOADMAXLEN = 256
 
-    def __init__(self, idx, logger, zmqsock, sqlitedb, pushq, feedbackq):
+    def __init__(self, idx, logger, zmqsock, pushq, feedbackq):
         Listener.__init__(self, idx, logger, zmqsock)
         self.l = logger
-        self.sqlitedb = sqlitedb
         self.pushq = pushq
         self.feedbackq = feedbackq
 
@@ -977,17 +977,13 @@ class APNSListener(Listener):
 
     def _perform_send(self, arglist, devtoks, payload):
         expiry = arglist[0]
-        self.sqlcur.execute('UPDATE ident SET cur=?',
-            (self.curid + len(devtoks), ))
 
         idlist = []
         for devtok in devtoks:
-            self.pushq.put((self.curid, now(), expiry, devtok, payload))
-            idlist.append(str(self.curid))
+            uid = self.pushq.put((now(), expiry, devtok, payload))
+            idlist.append(str(uid))
             self.l.debug("Got notification #%d for device token %s, " \
-                "expiring at %d" % (self.curid,
-                base64.standard_b64encode(devtok), expiry))
-            self.curid = self.curid + 1
+                "expiring at %d" % (uid, base64.standard_b64encode(devtok), expiry))
         return ' '.join(idlist)
 
     def _perform_feedback(self):
@@ -999,26 +995,6 @@ class APNSListener(Listener):
             timestamp, devtok = qobj.data
             feedbacks.append("%s:%s" % (timestamp, devtok))
         return ' '.join(feedbacks)
-
-    def run(self):
-        # Get current notification identifier.
-        sqlcon = sqlite3.connect(self.sqlitedb)
-        sqlcon.isolation_level = None
-        sqlcur = sqlcon.cursor()
-        sqlcur.execute('CREATE TABLE IF NOT EXISTS ' \
-            'ident(cur INTEGER PRIMARY KEY);')
-        sqlcur.execute('SELECT cur FROM ident;')
-        row = sqlcur.fetchone()
-        if row is None:
-            sqlcur.execute('INSERT INTO ident VALUES(0);')
-            row = (0,)
-        self.curid = row[0]
-        self.l.info("Notifications current identifier is %d" %
-            self.curid)
-
-        self.sqlcur = sqlcur
-        Listener.run(self)
-
 
 
 #############################################################################
@@ -1765,8 +1741,7 @@ for i in range(gcm_concurrency):
 #
 # Start APNSListener and GCMListener threads.
 #
-t = APNSListener(0, apns_logger, apns_zmqsock, apns_sqlitedb, apns_pushq,
-    apns_feedbackq)
+t = APNSListener(0, apns_logger, apns_zmqsock, apns_pushq, apns_feedbackq)
 t.start()
 t = GCMListener(0, gcm_logger, gcm_zmqsock, gcm_pushq, gcm_feedbackdb)
 # XXX Fix this.
