@@ -44,7 +44,6 @@ import time
 import types
 import zmq
 
-DEVTOKLEN = 32
 CONFIGFILE = 'push2mob.conf'
 
 def usage():
@@ -615,6 +614,8 @@ class Listener(threading.Thread):
 # APNS stuff.
 #############################################################################
 
+APNS_DEVTOKLEN = 32
+
 class APNSRecentNotifications:
     """
     Each instance of this class goes with one APNSAgent instance.
@@ -863,7 +864,7 @@ class APNSFeedbackAgent(threading.Thread):
         self.gateway = gateway
         self.frequency = frequency
         self.tlsconnect = tlsconnect
-        self.fmt = '> IH ' + str(DEVTOKLEN) + 's'
+        self.fmt = '> IH ' + str(APNS_DEVTOKLEN) + 's'
         self.tuplesize = struct.calcsize(self.fmt)
 
     def _close(self):
@@ -943,9 +944,9 @@ class APNSListener(Listener):
         goodtoks = []
         for dt in devtoks:
             devtok = ''
-            if len(dt) == DEVTOKLEN * 2:
+            if len(dt) == APNS_DEVTOKLEN * 2:
                 # Hexadecimal device token.
-                for i in range(0, DEVTOKLEN * 2, 2):
+                for i in range(0, APNS_DEVTOKLEN * 2, 2):
                     c = dt[i:i+2]
                     devtok = devtok + struct.pack('B', int(c, 16))
             else:
@@ -956,9 +957,9 @@ class APNSListener(Listener):
                     self._send_error("Wrong base64 encoding for device " \
                         "token: %s" % dt)
                     return None
-            if len(devtok) != DEVTOKLEN:
+            if len(devtok) != APNS_DEVTOKLEN:
                 self._send_error("Wrong device token length (%d != %s): %s" %
-                    (len(devtok), DEVTOKLEN, dt))
+                    (len(devtok), APNS_DEVTOKLEN, dt))
                 return None
             # Store the token in base64 in the queue, text is better
             # to debug.
