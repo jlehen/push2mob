@@ -113,7 +113,7 @@ class OrderedPersistentQueue:
         cur.execute(
             """UPDATE %s SET inuse = 0""" % tablename)
 
-    def _put(self, ordering, item):
+    def _sqlput(self, ordering, item):
         """
         Actually record in the database.  Return the uid of the
         inserted object.
@@ -125,10 +125,11 @@ class OrderedPersistentQueue:
             VALUES(?, ?)""" % self.table, (ordering, str(item)))
         return self.sqlcur.lastrowid
 
-    def _pick(self):
+    def _sqlpick(self):
         """
         Lookup next item in the database.  Returns an object containing
-        the following attributes: uid, ordering, data.
+        the following attributes: {uid, ordering, data} or None if there is
+        no data available.
         This must be called with self.cv locked.
         """
 
@@ -139,14 +140,13 @@ class OrderedPersistentQueue:
                 ORDER BY ordering LIMIT 1;""" % self.table)
             r = self.sqlcur.fetchone()
             if r is None:
-                self.cv.wait()
-                continue
+                return None
             return AttributeHolder(uid=r[0], ordering=r[1], data=eval(r[2]))
 
-    def _grab(self, r):
+    def _sqlgrab(self, r):
         """
         Actually record the item as being in use in the database.
-        The argument is the object returned by _pick().
+        The argument is the object returned by _sqlpick().
         This must be called with self.cv locked.
         """
 
@@ -154,10 +154,10 @@ class OrderedPersistentQueue:
             """UPDATE %s SET inuse = 1
             WHERE rowid = ?;""" % self.table, (r.uid, ))
 
-    def _ack(self, r):
+    def _sqlack(self, r):
         """
         Actually delete the item from the database.
-        The argument is the object returned by _pick().
+        The argument is the object returned by _sqlpick().
         This must be called with self.cv locked.
         """
 
@@ -166,10 +166,10 @@ class OrderedPersistentQueue:
             """DELETE FROM %s WHERE rowid = ?;""" % self.table,
             (r.uid, ))
 
-    def _reorder(self, r, ordering):
+    def _sqlreorder(self, r, ordering):
         """
         Reorder an item and mark it as unused.
-        The first argument is the object returned by _pick().
+        The first argument is the object returned by _sqlpick().
         This must be called with self.cv locked.
         """
 
@@ -177,7 +177,7 @@ class OrderedPersistentQueue:
             """UPDATE %s SET ordering = ?, inuse = 0
             WHERE rowid = ?""" % self.table, (ordering, r.uid))
 
-    def _qsize(self):
+    def _sqlqsize(self):
         """
         Actually reckon the number of elements in the queue.
         """
@@ -193,21 +193,42 @@ class OrderedPersistentQueue:
         """
 
         with Locker(self.cv):
-            uid = self._put(ordering, item)
+            uid = self._sqlput(ordering, item)
             self.cv.notify()
             return uid
 
-    def get(self):
+    def _peek(self, timeout=None):
         """
         Return the next item in an ordered fashion.
-        If nothing is available right now, it waits.
-        The result is a object with the following attributes:
-        uid, ordering, data.
+        If nothing is available right now, it waits for timeout seconds.
+        The result is a object with the following attributes
+        {uid, ordering, data} or None if the timeout triggered.
+        The timeout implementation is very rough but enough for our need.
+        This must be called with self.cv locked.
+        """
+
+        tries = 0
+        while True:
+            r = self._sqlpick()
+            if r is not None:
+                   return r
+            if timeout is 0:
+                return None
+            if timeout is not None and tries > 0:
+                return None
+            self.cv.wait(timeout)
+            tries = tries + 1
+
+    def get(self, timeout=None):
+        """
+        Same as _peek() but grabs the retrieved object.
         """
 
         with Locker(self.cv):
-            r = self._pick()
-            self._grab(r)
+            r = self._peek(timeout)
+            if r is None:
+                return None
+            self._sqlgrab(r)
             return r
 
     def ack(self, t):
@@ -217,7 +238,7 @@ class OrderedPersistentQueue:
         """
 
         with Locker(self.cv):
-            self._ack(t)
+            self._sqlack(t)
 
     def reorder(self, t, ordering):
         """
@@ -226,14 +247,14 @@ class OrderedPersistentQueue:
         """
 
         with Locker(self.cv):
-            self._reorder(t, ordering)
+            self._sqlreorder(t, ordering)
 
     def qsize(self):
         """
         Return the number of elements in the queue.
         """
 
-        return self._qsize()
+        return self._sqlqsize()
 
 
 
@@ -258,7 +279,7 @@ class ChronologicalPersistentQueue(OrderedPersistentQueue):
         """
 
         with Locker(self.cv):
-            uid = self._put(when, item)
+            uid = self._sqlput(when, item)
             timedelta = when - now()
             if timedelta < self.__class__._NEGLIGIBLEWAIT:
                 self.cv.notify()
@@ -275,18 +296,19 @@ class ChronologicalPersistentQueue(OrderedPersistentQueue):
         """
         Return the next item chronologically in a timely fashion.
         If nothing is available right now, it waits.
-        The result is a tuple with (rowid, timestamp, item).
+        The result is a object with the following attributes
+        {uid, ordering, data} or None if the timeout triggered.
         """
 
         with Locker(self.cv):
-            r = self._pick()
+            r = self._peek()
             while True:
                 timedelta = r.ordering - now()
                 if timedelta >= self.__class__._NEGLIGIBLEWAIT:
                     self.cv.wait(timedelta)
                     continue
                 break
-            self._grab(r)
+            self._sqlgrab(r)
             return r
 
 
