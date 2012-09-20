@@ -132,15 +132,14 @@ class OrderedPersistentQueue:
         This must be called with self.cv locked.
         """
 
-        while True:
-            self.sqlcur.execute(
-                """SELECT rowid, ordering, data from %s
-                WHERE inuse = 0
-                ORDER BY ordering LIMIT 1;""" % self.table)
-            r = self.sqlcur.fetchone()
-            if r is None:
-                return None
-            return AttributeHolder(uid=r[0], ordering=r[1], data=eval(r[2]))
+        self.sqlcur.execute(
+            """SELECT rowid, ordering, data from %s
+            WHERE inuse = 0
+            ORDER BY ordering LIMIT 1;""" % self.table)
+        r = self.sqlcur.fetchone()
+        if r is None:
+            return None
+        return AttributeHolder(uid=r[0], ordering=r[1], data=eval(r[2]))
 
     def _sqlgrab(self, r):
         """
