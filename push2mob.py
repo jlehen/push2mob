@@ -112,6 +112,12 @@ class OrderedPersistentQueue:
         cur.execute(
             """UPDATE %s SET inuse = 0""" % tablename)
 
+    def _sqlbegin(self):
+        self.sqlcur.execute("BEGIN")
+
+    def _sqlend(self):
+        self.sqlcur.execure("END")
+
     def _sqlput(self, ordering, item):
         """
         Actually record in the database.  Return the uid of the
@@ -183,6 +189,12 @@ class OrderedPersistentQueue:
         self.sqlcur.execute("SELECT COUNT(*) FROM %s" % self.table)
         r = self.sqlcur.fetchone()
         return r[0]
+
+    def startbatchinsert(self):
+        self._sqlbegin()
+
+    def endbatchinsert(self):
+        self._sqlend()
 
     def put(self, ordering, item):
         """
@@ -894,6 +906,7 @@ class APNSFeedbackAgent(threading.Thread):
                     break
 
                 buf = buf + b
+                self.feedbackq.startbatchinsert()
                 while True:
                     try:
                         bintuple = buf[0:self.tuplesize]
@@ -908,6 +921,7 @@ class APNSFeedbackAgent(threading.Thread):
                     self.l.info("New feedback tuple (%s, %s)" %
                         (ts, devtok))
                     self.feedbackq.put((ts, devtok))
+                self.feedbackq.endbatchinsert()
 
             self._close()
 
@@ -978,11 +992,13 @@ class APNSListener(Listener):
         expiry = arglist[0]
 
         idlist = []
+        self.pushq.startbatchinsert()
         for devtok in devtoks:
             uid = self.pushq.put((now(), expiry, devtok, payload))
             idlist.append(str(uid))
             self.l.debug("Got notification #%d for device token %s, " \
                 "expiring at %d" % (uid, base64.standard_b64encode(devtok), expiry))
+        self.pushq.endbatchinsert()
         return ' '.join(idlist)
 
     def _perform_feedback(self):
