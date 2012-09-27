@@ -1498,11 +1498,6 @@ class GCMListener(Listener):
 
         arglist = [collapsekey, expiry, delayidle]
 
-        # Check device token format.
-        if len(ids) > GCMListener._MAXNUMIDS:
-            self._send_error("Too many registration IDs (%d > %d)" % \
-                (len(ids), GCMListener._MAXNUMIDS))
-
         goodids = []
         for i in ids:
             r = self.idschanges.query(i)
@@ -1552,11 +1547,16 @@ class GCMListener(Listener):
         delayidle = arglist[2]
 
         createtime = now()
-        uid = self.pushq.put(createtime, (createtime, collapsekey, expiry,
-            delayidle, devtoks, payload))
-        self.l.debug("Got notification #%d for %d devices, " \
-            "expiring at %d" % (uid, len(devtoks), expiry))
-        return str(uid)
+        uids = []
+        while len(devtoks) > 0:
+            toks = devtoks[:GCMListener._MAXNUMIDS]
+            devtoks = devtoks[GCMListener._MAXNUMIDS:]
+            uid = self.pushq.put(createtime, (createtime, collapsekey, expiry,
+                delayidle, toks, payload))
+            self.l.debug("Got notification #%d for %d devices, " \
+                "expiring at %d" % (uid, len(toks), expiry))
+            uids.append(str(uid))
+        return ' '.join(uids)
 
     def _perform_feedback(self):
         feedbacks = self.idschanges.queryAll()
