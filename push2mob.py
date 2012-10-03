@@ -308,7 +308,7 @@ class ChronologicalPersistentQueue(OrderedPersistentQueue):
         Return the next item chronologically in a timely fashion.
         If nothing is available right now, it waits.
         The result is a object with the following attributes
-        {uid, ordering, data} or None if the timeout triggered.
+        {uid, ordering, data}.
         """
 
         with Locker(self.cv):
