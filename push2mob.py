@@ -213,21 +213,22 @@ class OrderedPersistentQueue:
         If nothing is available right now, it waits for timeout seconds.
         The result is a object with the following attributes
         {uid, ordering, data} or None if the timeout triggered.
-        The timeout implementation is very rough but enough for our need.
+        The timeout implementation is very rough but sufficient for our need.
         This must be called with self.cv locked.
         """
 
-        tries = 0
+        loops = 0
         while True:
             r = self._sqlpick()
             if r is not None:
                    return r
-            if timeout is 0:
-                return None
-            if timeout is not None and tries > 0:
-                return None
+            if timeout is not None:
+                if timeout == 0:
+                    return None
+                if loops > 0:
+                    return None
             self.cv.wait(timeout)
-            tries = tries + 1
+            loops = loops + 1
 
     def get(self, timeout=None):
         """
