@@ -67,6 +67,18 @@ def hexdump(buf, chunklen = 16):
             print fmt % (' '.join("%02x" % ord(c) for c in b),
                 ' ', ''.join(['.', c][c.isalnum()] for c in b))
 
+def jsonload(payload):
+    obj = None
+    try:
+        obj = json.loads(payload)
+    except ValueError as e:
+        return None
+    # Python's json module accepts top-level non-list, non-array values
+    # while RFC4627 doesn't.  Catch this here.
+    if type(obj) is not types.ListType and type(obj) is not types.DictType:
+        return None
+    return obj
+
 
 class Locker:
     def __init__(self, lock):
@@ -986,6 +998,11 @@ class APNSListener(Listener):
                 APNSListener._PAYLOADMAXLEN, payload)
             return None
 
+        obj = jsonload(payload)
+        if obj is None:
+            self._send_error("Invalid JSON payload: %s" % payload)
+            return None
+
         # Mimic _parse_send_args() return value.
         return (arglist, devtoks, payload)
 
@@ -1527,17 +1544,11 @@ class GCMListener(Listener):
                 GCMListener._PAYLOADMAXLEN, payload)
             return None
 
-        try:
-            tmp = json.loads(payload)
-        except ValueError as e:
+        obj = jsonload(payload)
+        if obj is None:
             self._send_error("Invalid JSON payload: %s" % payload)
             return None
-        # Python's json module accepts top-level non-list, non-array values
-        # while GCM doesn't.  Catch this here.
-        if type(tmp) is not types.ListType and type(tmp) is not types.DictType:
-            self._send_error("Invalid JSON payload: %s" % payload)
-            return None
-        payload = tmp
+        payload = obj
 
         # Mimic _parse_send_args() return value.
         return (arglist, ids, payload)
