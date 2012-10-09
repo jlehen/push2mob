@@ -265,25 +265,25 @@ Feedback containing a replaced device token:
 # IV. APNS CERTIFICATES
 
 As time of writing, APNS is signed by Entrust.  You can check this using:
-  openssl s_client -connect gateway.sandbox.push.apple.com:2195 
+    openssl s_client -connect gateway.sandbox.push.apple.com:2195 
 
 This command will show you the certificate used by APNS.  The output is
 quite verbose, but you will see a "Certificate chain" section at the
 beginning.  Right now it is:
 
-  Certificate chain
-   0 s:/C=US/ST=California/L=Cupertino/O=Apple Inc./OU=iTMS Engineering/CN=gateway.sandbox.push.apple.com
-     i:/C=US/O=Entrust, Inc./OU=www.entrust.net/rpa is incorporated by reference/OU=(c) 2009 Entrust, Inc./CN=Entrust Certification Authority - L1C
-   1 s:/C=US/O=Entrust, Inc./OU=www.entrust.net/rpa is incorporated by reference/OU=(c) 2009 Entrust, Inc./CN=Entrust Certification Authority - L1C
-     i:/O=Entrust.net/OU=www.entrust.net/CPS_2048 incorp. by ref. (limits liab.)/OU=(c) 1999 Entrust.net Limited/CN=Entrust.net Certification Authority (2048)
+    Certificate chain
+       0 s:/C=US/ST=California/L=Cupertino/O=Apple Inc./OU=iTMS Engineering/CN=gateway.sandbox.push.apple.com
+         i:/C=US/O=Entrust, Inc./OU=www.entrust.net/rpa is incorporated by reference/OU=(c) 2009 Entrust, Inc./CN=Entrust Certification Authority - L1C
+       1 s:/C=US/O=Entrust, Inc./OU=www.entrust.net/rpa is incorporated by reference/OU=(c) 2009 Entrust, Inc./CN=Entrust Certification Authority - L1C
+         i:/O=Entrust.net/OU=www.entrust.net/CPS_2048 incorp. by ref. (limits liab.)/OU=(c) 1999 Entrust.net Limited/CN=Entrust.net Certification Authority (2048)
 
 This last line is the root certificate you need to authenticate APNS'
 certificate.  On Debian, you can find it in
-  /etc/ssl/certs/Entrust.net_Premium_2048_Secure_Server_CA.pem
+    /etc/ssl/certs/Entrust.net_Premium_2048_Secure_Server_CA.pem
 
 In case you need it, just ask "Entrust root certificate" to Google and
 once you are on the page on Entrust's website, select "Root Certificates"
-and download "entrust_2048_ca.cer".  This is the same file as above.
+and download "entrust\_2048\_ca.cer".  This is the same file as above.
 
 
 
