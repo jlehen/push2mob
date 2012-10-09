@@ -265,6 +265,7 @@ Feedback containing a replaced device token:
 # IV. APNS CERTIFICATES
 
 As time of writing, APNS is signed by Entrust.  You can check this using:
+
     openssl s_client -connect gateway.sandbox.push.apple.com:2195 
 
 This command will show you the certificate used by APNS.  The output is
