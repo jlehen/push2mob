@@ -1477,7 +1477,7 @@ class GCMListener(Listener):
     """
 
     _MAXNUMIDS = 1000
-    _MAXTTL = 2419200
+    _MAXTTL = 2419200       # 4 weeks
     _PAYLOADMAXLEN = 4096
 
     def __init__(self, idx, logger, zmqsock, pushq, idschanges):
