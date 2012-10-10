@@ -345,7 +345,7 @@ class PersistentFIFO(OrderedPersistentQueue):
         OrderedPersistentQueue.__init__(self, sqlite, tablename)
 
     def put(self, item):
-        OrderedPersistentQueue.put(self, now(), item)
+        return OrderedPersistentQueue.put(self, now(), item)
 
     def get(self, timeout=None):
         r = OrderedPersistentQueue.get(self, timeout)
