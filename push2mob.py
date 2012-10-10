@@ -22,7 +22,6 @@
 # SOFTWARE.
 
 import ConfigParser
-import Queue
 import base64
 import datetime
 import getopt
@@ -798,11 +797,8 @@ class APNSAgent(threading.Thread):
                 timeout = None
             else:
                 timeout = 1
-            try:
-                apnsmsg = self.pushq.get(timeout)
-                uid = apnsmsg.uid
-                creation, expiry, devtok, payload = apnsmsg.data
-            except Queue.Empty as e:
+            apnsmsg = self.pushq.get(timeout)
+            if apnsmsg is None:
                 triple = select.select([self.sock], [], [], 0)
                 if len(triple[0]) != 0:
                     self._processerror()
@@ -815,6 +811,8 @@ class APNSAgent(threading.Thread):
                         timeout = None
                 continue
                     
+            uid = apnsmsg.uid
+            creation, expiry, devtok, payload = apnsmsg.data
             bintok = base64.standard_b64decode(devtok)
 
             # Check notification lag.
