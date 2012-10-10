@@ -128,7 +128,7 @@ class OrderedPersistentQueue:
         self.sqlcur.execute("BEGIN")
 
     def _sqlend(self):
-        self.sqlcur.execure("END")
+        self.sqlcur.execute("END")
 
     def _sqlput(self, ordering, item):
         """
