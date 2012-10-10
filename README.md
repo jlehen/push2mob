@@ -262,7 +262,12 @@ Feedback containing a replaced device token:
     REP> OK
     APA91bE01klpKUSdNV7VV-8_kixm4MA9Vn10Hua1-1jGe9GZMXcvCSl1fKUUNmNGTJoPa3thUHEKUEjatJh-Qtlc5xbWlFt23wSfT69a5ucmp4jdXw20KZOVEc6rOaPbqL9aqjCDX16xiGCxU3G2qpBcxvtKEjD8RCyAc-iYQMcq4OxGHvOHXFY:replaced:ZqmdcEq3sUvs9cl7K8nj48poxSQi15yhECergqmY0_G6Go3EIy0s17X-h35qeABBatPq0j1uS8CYH1Zj_UhHHb8u8kpwFv1iIGYvAAk5WPmBTTosnAV_C85MJ4
 
-# IV. APNS CERTIFICATES
+# IV. CONFIGURATION
+
+Configuration file is pretty well commented and should not pose you any
+problem.
+
+## IV.1. APNS Certificates
 
 As time of writing, APNS is signed by Entrust.  You can check this using:
 
@@ -288,25 +293,32 @@ and download "entrust\_2048\_ca.cer".  This is the same file as above.
 
 
 
-# V. DESIGN
+# V. IMPLEMENTATION BIG PICTURE
 
 Each service has at least two kind of threads:
-* a listener threads which receives commands through a ZeroMQ REP/REQ
+* one listener thread which receives commands through a ZeroMQ REP/REQ
   socket;
-* an agent thread 
+* one or more agent threads pushing notifications to the provider;
+* for APNS, there is one additional thread to periodically retrieve
+  informations for the feedback service.
 
-The main thread listens on a REP/REQ (ping/pong) ZeroMQ socket for user
-commands.  Depending on the configuration file, there are 1 to N threads
-connected to the APNS for sending notifications.  There is also one thread
-dedicated to the feedback service.
+Internally, the communication between various threads is done using
+persistent queues, implemented with SQLite.  The class containing most
+of the logic is OrderedPersistentQueue.  ChronologicalPersistentQueue
+derives from it and the order is turned into a timestamp to ensure a
+timely delivery.  PersistentFIFO also derives from it and just provides
+a simpler API than the base class.
 
-A PersistentQueue class derives the Python's synchronized Queue class but
-with a persistent SQLite backend.
+The listener thread listens on a REP/REQ (ping/pong) ZeroMQ socket for
+user commands.  It puts new notifications on a persistent queue and
+gets feedback information from another persistent queue.
 
-Each notification requested by the user through the ZeroMQ socket is
-enqueued to the persistent queue of notifications, from which notification
-threads retrieve it and relay it to APNS.
+Depending on the configuration file, there are 1 to N threads connected
+to the push service for sending notifications.  It waits on the
+notification persistent queue and carries them out as they come.  It
+also enqueues some feedback informations on the feedback persistent
+queue.
 
-The feedback thread periodically connects to the Apple feedback service and
-enqueues each message to a persistent queue, which is polled when the user
-uses the feedback command through the ZeroMQ socket.
+For APNS, one thread is dedicated to periodically retrieve informations
+for the feedback service and enqueues them on the feedback persistent
+queue.
