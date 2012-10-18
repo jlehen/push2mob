@@ -1633,7 +1633,6 @@ def createLogger(name, logfile, level, propagate, formatter):
 logging.basicConfig(level=logging.DEBUG,
     format='%(asctime)s MAIN/%(threadName)s: %(message)s',
     datefmt='%Y/%m/%d %H:%M:%S')
-logging.warning("Starting...")
 
 cp = ConfigParser.SafeConfigParser()
 l = cp.read([CONFIGFILE])
@@ -1698,6 +1697,8 @@ apns_logger = createLogger('push2mob.APNS', apns_logfile, apns_loglevel,
     apns_logpropagate, formatter)
 gcm_logger = createLogger('push2mob.GCM', gcm_logfile, gcm_loglevel,
     gcm_logpropagate, formatter)
+
+main_logger.warning("Starting...")
 
 if apns_devtok_format != 'base64' and apns_devtok_format != 'hex':
     main_logger.error("%s: Unknown device token format: %s" %
