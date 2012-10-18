@@ -1698,7 +1698,7 @@ apns_logger = createLogger('push2mob.APNS', apns_logfile, apns_loglevel,
 gcm_logger = createLogger('push2mob.GCM', gcm_logfile, gcm_loglevel,
     gcm_logpropagate, formatter)
 
-main_logger.warning("Starting...")
+main_logger.warning("Starting with pid %u..." % os.getpid())
 
 if apns_devtok_format != 'base64' and apns_devtok_format != 'hex':
     main_logger.error("%s: Unknown device token format: %s" %
