@@ -1633,6 +1633,7 @@ def createLogger(name, logfile, level, propagate, formatter):
 logging.basicConfig(level=logging.DEBUG,
     format='%(asctime)s MAIN/%(threadName)s: %(message)s',
     datefmt='%Y/%m/%d %H:%M:%S')
+logging.warning("Starting...")
 
 cp = ConfigParser.SafeConfigParser()
 l = cp.read([CONFIGFILE])
