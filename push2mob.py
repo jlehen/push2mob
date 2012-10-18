@@ -1630,9 +1630,9 @@ def createLogger(name, logfile, level, propagate, formatter):
     return logger
 
 # For early log messages.
-#logging.basicConfig(level=logging.DEBUG,
-#    format='%(asctime)s MAIN/%(threadName)s: %(message)s',
-#    datefmt='%Y/%m/%d %H:%M:%S')
+logging.basicConfig(level=logging.DEBUG,
+    format='%(asctime)s MAIN/%(threadName)s: %(message)s',
+    datefmt='%Y/%m/%d %H:%M:%S')
 
 cp = ConfigParser.SafeConfigParser()
 l = cp.read([CONFIGFILE])
