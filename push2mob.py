@@ -43,6 +43,7 @@ import time
 import types
 import zmq
 
+DUMP_QUERIES = False
 CONFIGFILE = 'push2mob.conf'
 
 def usage():
@@ -830,17 +831,15 @@ class APNSAgent(threading.Thread):
                 continue
 
             # Build the binary message.
-            self.l.debug("Sending notification #%d to %s, " \
-                "lagging by %us: %s" %
-                (uid, self.devtokfmt(bintok), lag, payload))
             fmt = '> B II' + 'H' + str(len(bintok)) + 's' + \
                 'H' + str(len(payload)) + 's'
             # XXX Should we check the expiry?  We provide an absolute value
             # to APNS which may be in the past.  This is harmless though.
             binmsg = struct.pack(fmt, APNSAgent._EXTENDEDNOTIFICATION, uid,
                 expiry, len(bintok), bintok, len(payload), payload)
-            self.l.debug("Notification #%d: %s", hexdump(binmsg))
-            
+            if DUMP_QUERIES:
+                self.l.debug("Notification #%d: %s", (uid, hexdump(binmsg)))
+
             # Now send it.
             if self.sock is None:
                 self._connect()
@@ -863,7 +862,8 @@ class APNSAgent(threading.Thread):
                     "abording" % (uid, self.devtokfmt(bintok)))
                 continue
             self.recentnotifications.record(uid, bintok)
-            self.l.info("Notification #%d sent after %us", (uid, lag))
+
+            self.l.info("Notification #%d sent delayed by %.3fs", (uid, lag))
 
             if self.maxerrorwait != 0:
                 # Receive a possible error in the preceeding message.
@@ -1330,7 +1330,9 @@ class GCMAgent(threading.Thread):
             if self.dryrun:
                 req['dry_run'] = True
             jsonmsg = json.dumps(req, indent=4, separators=(', ',': '))
-            self.l.debug("Notification #%d: %s" % (uid, jsonmsg))
+
+            if DUMP_QUERIES:
+                self.l.debug("Notification #%d: %s", (uid, jsonmsg))
             jsonmsg = json.dumps(req, separators=(',',':'))
 
             httpresp = self.gcmreq.send(jsonmsg)
@@ -1396,9 +1398,9 @@ class GCMAgent(threading.Thread):
                     (uid, jsonresp))
                 continue
 
-            self.l.info("Notification #%d sent as %s after %us: " \
+            self.l.info("Notification #%d sent delayed by %.3fs as id %s: " \
                 "success %d, failure %d, canonical_ids %d" %
-                (uid, resp['multicast_id'], lag,
+                (uid, lag, resp['multicast_id'],
                  resp['success'], resp['failure'], resp['canonical_ids']))
             if resp['failure'] == 0 and resp['canonical_ids'] == 0:
                 continue
