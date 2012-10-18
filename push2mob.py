@@ -56,6 +56,7 @@ def now():
         return time.time()
 
 def hexdump(buf, chunklen = 16):
+        output = ""
         l = chunklen
         while len(buf) > 0:
             b = buf[:l]
@@ -63,8 +64,10 @@ def hexdump(buf, chunklen = 16):
             s = 3 * l - 1
             #b = b.ljust(l, '\000')
             fmt = "%-" + str(s) + "s%s%s"
-            print fmt % (' '.join("%02x" % ord(c) for c in b),
+            ouput = output + fmt % (' '.join("%02x" % ord(c) for c in b),
                 ' ', ''.join(['.', c][c.isalnum()] for c in b))
+            output = output + "\n"
+        return output
 
 def jsonload(payload):
     obj = None
@@ -524,7 +527,7 @@ class Listener(threading.Thread):
 
     def __init__(self, idx, logger, zmqsock):
         threading.Thread.__init__(self)
-        self.name = "Listener%d" % idx
+        self.name = "GenericListener%d" % idx
         self.daemon = True
         self.l = logger
         self.zmqsock = zmqsock
@@ -834,7 +837,7 @@ class APNSAgent(threading.Thread):
             # to APNS which may be in the past.  This is harmless though.
             binmsg = struct.pack(fmt, APNSAgent._EXTENDEDNOTIFICATION, uid,
                 expiry, len(bintok), bintok, len(payload), payload)
-            hexdump(binmsg)
+            self.l.debug("%s", hexdump(binmsg))
             
             # Now send it.
             if self.sock is None:
@@ -949,6 +952,7 @@ class APNSListener(Listener):
 
     def __init__(self, idx, logger, zmqsock, pushq, feedbackq):
         Listener.__init__(self, idx, logger, zmqsock)
+        self.name = "Listener%d" % idx
         self.l = logger
         self.pushq = pushq
         self.feedbackq = feedbackq
@@ -1480,6 +1484,7 @@ class GCMListener(Listener):
 
     def __init__(self, idx, logger, zmqsock, pushq, idschanges):
         Listener.__init__(self, idx, logger, zmqsock)
+        self.name = "Listener%d" % idx
         self.l = logger
         self.pushq = pushq
         self.idschanges = idschanges
@@ -1610,54 +1615,103 @@ for o, a in opts:
 # Get configuration.
 #
 
+def parse_loglevel(l):
+    loglevels = {
+        'debug'   : logging.DEBUG,
+        'info'    : logging.INFO,
+        'warning' : logging.WARNING,
+        'error'   : logging.ERROR
+    }
+    ret = loglevels.get(l)
+    if ret is None:
+        raise Exception("Unknown log level: %s" % l)
+    return ret
+
+def createLogger(name, logfile, level, propagate, formatter):
+    logger = logging.getLogger(name)
+    logger.setLevel(level)
+    if len(logfile) == 0:
+        handler = logging.FileHandler("/dev/null")
+        logger.addHandler(handler)
+        logger.propagate = True
+        return logger
+
+    logger.propagate = propagate
+    handler = logging.FileHandler(logfile)
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+    return logger
+
+# For early log messages.
+#logging.basicConfig(level=logging.DEBUG,
+#    format='%(asctime)s MAIN/%(threadName)s: %(message)s',
+#    datefmt='%Y/%m/%d %H:%M:%S')
+
 cp = ConfigParser.SafeConfigParser()
 l = cp.read([CONFIGFILE])
 if len(l) == 0:
     raise Exception("Cannot open '%s'" % CONFIGFILE)
 
 try:
-    logfile = cp.get('main', 'daemon_log_file')
+    daemon = cp.getboolean('main', 'daemon')
+    logfile = cp.get('main', 'log_file')
+    try:
+        loglevel = parse_loglevel(cp.get('main', 'log_level'))
+    except Exception as e:
+        raise Exception("main.log_level: %s" % e)
     apns_zmq_bind = cp.get('apns', 'zmq_bind')
     apns_sqlitedb = cp.get('apns', 'sqlite_db')
+    apns_logfile = cp.get('apns', 'log_file')
+    try:
+        apns_loglevel = parse_loglevel(cp.get('apns', 'log_level'))
+    except Exception as e:
+        raise Exception("apns.log_level: %s" % e)
+    apns_logpropagate = cp.getboolean('apns', 'log_propagate')
     apns_cacerts = cp.get('apns', 'cacerts_file')
     apns_cert = cp.get('apns', 'cert_file')
     apns_key = cp.get('apns', 'key_file')
     apns_devtok_format = cp.get('apns', 'device_token_format')
     apns_push_gateway = cp.get('apns', 'push_gateway')
-    apns_push_concurrency = int(cp.get('apns', 'push_concurrency'))
-    apns_push_max_notif_lag = float(cp.get('apns', 'push_max_notification_lag'))
-    apns_push_max_error_wait = float(cp.get('apns', 'push_max_error_wait'))
+    apns_push_concurrency = cp.getint('apns', 'push_concurrency')
+    apns_push_max_notif_lag = cp.getfloat('apns', 'push_max_notification_lag')
+    apns_push_max_error_wait = cp.getfloat('apns', 'push_max_error_wait')
     apns_feedback_gateway = cp.get('apns', 'feedback_gateway')
-    apns_feedback_freq = float(cp.get('apns', 'feedback_frequency'))
+    apns_feedback_freq = cp.getfloat('apns', 'feedback_frequency')
     gcm_zmq_bind = cp.get('gcm', 'zmq_bind')
     gcm_server_url = cp.get('gcm', 'server_url')
     gcm_sqlitedb = cp.get('gcm', 'sqlite_db')
+    gcm_logfile = cp.get('gcm', 'log_file')
+    try:
+        gcm_loglevel = parse_loglevel(cp.get('gcm', 'log_level'))
+    except Exception as e:
+        raise Exception("gcm.log_level: %s" % e)
+    gcm_logpropagate = cp.getboolean('gcm', 'log_propagate')
     gcm_api_key = cp.get('gcm', 'api_key')
-    gcm_concurrency = int(cp.get('gcm', 'concurrency'))
-    gcm_max_retries = int(cp.get('gcm', 'max_retries'))
-    gcm_max_notif_lag = float(cp.get('gcm', 'max_notification_lag'))
-    gcm_min_interval = float(cp.get('gcm', 'min_interval'))
-    gcm_dry_run = int(cp.get('gcm', 'dry_run'))
-except ConfigParser.Error as e:
+    gcm_concurrency = cp.getint('gcm', 'concurrency')
+    gcm_max_retries = cp.getint('gcm', 'max_retries')
+    gcm_max_notif_lag = cp.getfloat('gcm', 'max_notification_lag')
+    gcm_min_interval = cp.getfloat('gcm', 'min_interval')
+    gcm_dry_run = cp.getboolean('gcm', 'dry_run')
+except BaseException as e:
     logging.error("%s: %s" % (CONFIGFILE, e))
     sys.exit(1)
 
-gcm_dry_run = False
-if gcm_dry_run:
-    gcm_dry_run = True
+if daemon and len(logfile) == 0:
+    logging.error("Option main.log_file cannot be empty in daemon mode")
+    sys.exit(1)
 
-if len(logfile) == 0:
-        logging.basicConfig(level=logging.DEBUG,
-            format='%(asctime)s %(name)s/%(threadName)s: %(message)s',
-            datefmt='%Y/%m/%d %H:%M:%S')
-else:
-        logging.basicConfig(filename=logfile, level=logging.DEBUG,
-            format='%(asctime)s %(name)s/%(threadName)s: %(message)s',
-            datefmt='%Y/%m/%d %H:%M:%S')
-
-main_logger = logging.getLogger('MAIN')
-apns_logger = logging.getLogger('APNS')
-gcm_logger = logging.getLogger('GCM')
+formatter = logging.Formatter('%(asctime)s %(name)s/%(threadName)s: ' \
+    '%(message)s', '%Y/%m/%d %H:%M:%S')
+main_logger = createLogger('push2mob', logfile, loglevel, False, formatter)
+main_logger.propagate = False
+if not daemon:
+    handler = logging.StreamHandler()
+    handler.setFormatter(formatter)
+    main_logger.addHandler(handler)
+apns_logger = createLogger('push2mob.APNS', apns_logfile, apns_loglevel,
+    apns_logpropagate, formatter)
+gcm_logger = createLogger('push2mob.GCM', gcm_logfile, gcm_loglevel,
+    gcm_logpropagate, formatter)
 
 if apns_devtok_format != 'base64' and apns_devtok_format != 'hex':
     main_logger.error("%s: Unknown device token format: %s" %
@@ -1733,7 +1787,7 @@ gcm_expbackoffdb = GCMExponentialBackoffDatabase(gcm_max_retries)
 #
 # Daemonize.
 #
-if len(logfile) != 0:
+if daemon:
     try:
         pid = os.fork()
     except OSError as e:
