@@ -474,6 +474,7 @@ class HTTPResponseReceiver:
         if self.state == HTTPResponseReceiver.NEWHEADER:
             if self._do_status(line):
                 return
+            # XXX Raise an exception or return an error.
             print "ERROR: HTTP status line expected: %s" % line
             sys.exit(1)
         if self.state == HTTPResponseReceiver.WAITINGNEXTBLOCK:
@@ -487,6 +488,7 @@ class HTTPResponseReceiver:
                 return
             if self._do_header(line):
                 return
+            # XXX Raise an exception or return an error.
             print "ERROR: Unexpected HTTP header format"
             sys.exist(1)
         self.body.append(line)
@@ -837,7 +839,7 @@ class APNSAgent(threading.Thread):
             # to APNS which may be in the past.  This is harmless though.
             binmsg = struct.pack(fmt, APNSAgent._EXTENDEDNOTIFICATION, uid,
                 expiry, len(bintok), bintok, len(payload), payload)
-            self.l.debug("%s", hexdump(binmsg))
+            self.l.debug("Notification #%d: %s", hexdump(binmsg))
             
             # Now send it.
             if self.sock is None:
@@ -861,7 +863,7 @@ class APNSAgent(threading.Thread):
                     "abording" % (uid, self.devtokfmt(bintok)))
                 continue
             self.recentnotifications.record(uid, bintok)
-            self.l.info("Notification #%d sent", uid)
+            self.l.info("Notification #%d sent after %us", (uid, lag))
 
             if self.maxerrorwait != 0:
                 # Receive a possible error in the preceeding message.
@@ -1313,7 +1315,7 @@ class GCMAgent(threading.Thread):
             # before handing the notification to the GCM service.
             ttl = int(round(expiry - now()))
             if ttl < 1:
-                self.l.info("Discarding notification #%d: " \
+                self.l.warning("Discarding notification #%d: " \
                     "time-to-live exceeded by %us (ttl: %us)" %
                     (uid, -ttl, round(expiry - creation)))
                 continue
@@ -1328,9 +1330,8 @@ class GCMAgent(threading.Thread):
             if self.dryrun:
                 req['dry_run'] = True
             jsonmsg = json.dumps(req, indent=4, separators=(', ',': '))
-            print jsonmsg
+            self.l.debug("Notification #%d: %s" % (uid, jsonmsg))
             jsonmsg = json.dumps(req, separators=(',',':'))
-            print jsonmsg
 
             httpresp = self.gcmreq.send(jsonmsg)
             status = httpresp.getStatus()
@@ -1395,9 +1396,9 @@ class GCMAgent(threading.Thread):
                     (uid, jsonresp))
                 continue
 
-            self.l.info("Notification #%d sent as %s: " \
+            self.l.info("Notification #%d sent as %s after %us: " \
                 "success %d, failure %d, canonical_ids %d" %
-                (uid, resp['multicast_id'],
+                (uid, resp['multicast_id'], lag,
                  resp['success'], resp['failure'], resp['canonical_ids']))
             if resp['failure'] == 0 and resp['canonical_ids'] == 0:
                 continue
