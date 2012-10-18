@@ -718,7 +718,7 @@ class APNSAgent(threading.Thread):
         255: "None (unknown)"
     }
 
-    def __init__(self, idx, logger, devtokfmt, pushq, gateway, maxnotiflag,
+    def __init__(self, idx, logger, devtokfmt, pushq, gateway,
         maxerrorwait, feedbackq, tlsconnect):
 
         threading.Thread.__init__(self)
@@ -728,7 +728,6 @@ class APNSAgent(threading.Thread):
         self.devtokfmt = devtokfmt
         self.pushq = pushq
         self.gateway = gateway
-        self.maxnotiflag = maxnotiflag
         self.maxerrorwait = maxerrorwait
         self.feedbackq = feedbackq
         self.tlsconnect = tlsconnect
@@ -821,15 +820,6 @@ class APNSAgent(threading.Thread):
             creation, expiry, devtok, payload = apnsmsg.data
             bintok = base64.standard_b64decode(devtok)
 
-            # Check notification lag.
-            lag = now() - creation
-            if lag > self.maxnotiflag:
-                self.l.info("Discarding notification #%d to %s: " \
-                    "delayed by %us (max %us)" %
-                    (uid, self.devtokfmt(bintok), round(lag, 2),
-                     self.maxnotiflag))
-                continue
-
             # Build the binary message.
             fmt = '> B II' + 'H' + str(len(bintok)) + 's' + \
                 'H' + str(len(payload)) + 's'
@@ -863,6 +853,7 @@ class APNSAgent(threading.Thread):
                 continue
             self.recentnotifications.record(uid, bintok)
 
+            lag = now() - creation
             self.l.info("Notification #%d sent delayed by %.3fs", (uid, lag))
 
             if self.maxerrorwait != 0:
@@ -1268,7 +1259,7 @@ class GCMAgent(threading.Thread):
         'MissingCollapseKey'    : 'Missing Collapse Key'
     }
 
-    def __init__(self, idx, logger, pushq, server_url, api_key, maxnotiflag,
+    def __init__(self, idx, logger, pushq, server_url, api_key,
         min_interval, dry_run, expbackoffdb, feedbackdb):
 
         threading.Thread.__init__(self)
@@ -1277,7 +1268,6 @@ class GCMAgent(threading.Thread):
         self.l = logger
         self.pushq = pushq
         self.gcmreq = GCMHTTPRequest(server_url, api_key)
-        self.maxnotiflag = maxnotiflag
         self.mininterval = min_interval
         self.dryrun = dry_run
         self.expbackoffdb = expbackoffdb
@@ -1301,14 +1291,6 @@ class GCMAgent(threading.Thread):
             ordering = gcmmsg.ordering
             creation, collapsekey, expiry, delayidle, devtoks, payload = \
                 gcmmsg.data
-
-            # Check notification lag.
-            lag = now() - creation
-            if lag > self.maxnotiflag:
-                self.l.info("Discarding notification #%d: " \
-                    "delayed by %us (max %us)" %
-                    (uid, round(lag, 2), self.maxnotiflag))
-                continue
 
             # We store an absolute value but GCM wants a relative TTL.
             # Semantically this makes sense to adjust the TTL just
@@ -1398,6 +1380,7 @@ class GCMAgent(threading.Thread):
                     (uid, jsonresp))
                 continue
 
+            lag = now() - creation
             self.l.info("Notification #%d sent delayed by %.3fs as id %s: " \
                 "success %d, failure %d, canonical_ids %d" %
                 (uid, lag, resp['multicast_id'],
@@ -1676,7 +1659,6 @@ try:
     apns_devtok_format = cp.get('apns', 'device_token_format')
     apns_push_gateway = cp.get('apns', 'push_gateway')
     apns_push_concurrency = cp.getint('apns', 'push_concurrency')
-    apns_push_max_notif_lag = cp.getfloat('apns', 'push_max_notification_lag')
     apns_push_max_error_wait = cp.getfloat('apns', 'push_max_error_wait')
     apns_feedback_gateway = cp.get('apns', 'feedback_gateway')
     apns_feedback_freq = cp.getfloat('apns', 'feedback_frequency')
@@ -1692,7 +1674,6 @@ try:
     gcm_api_key = cp.get('gcm', 'api_key')
     gcm_concurrency = cp.getint('gcm', 'concurrency')
     gcm_max_retries = cp.getint('gcm', 'max_retries')
-    gcm_max_notif_lag = cp.getfloat('gcm', 'max_notification_lag')
     gcm_min_interval = cp.getfloat('gcm', 'min_interval')
     gcm_dry_run = cp.getboolean('gcm', 'dry_run')
 except BaseException as e:
@@ -1805,8 +1786,7 @@ if daemon:
 #
 for i in range(apns_push_concurrency):
     t = APNSAgent(i, apns_logger, apns_devtokfmt, apns_pushq, apns_push_gateway,
-        apns_push_max_notif_lag, apns_push_max_error_wait, apns_feedbackq,
-        apns_tlsconnect)
+        apns_push_max_error_wait, apns_feedbackq, apns_tlsconnect)
     t.start()
 
 t = APNSFeedbackAgent(0, apns_logger, apns_devtokfmt, apns_feedbackq,
@@ -1816,8 +1796,7 @@ t.start()
 
 for i in range(gcm_concurrency):
     t = GCMAgent(i, gcm_logger, gcm_pushq, gcm_server_url, gcm_api_key,
-        gcm_max_notif_lag, gcm_min_interval, gcm_dry_run,
-        gcm_expbackoffdb, gcm_feedbackdb)
+        gcm_min_interval, gcm_dry_run, gcm_expbackoffdb, gcm_feedbackdb)
     t.start()
 
 #
