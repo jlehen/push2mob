@@ -1771,8 +1771,8 @@ try:
     apns_zmqsock = zmqctx_r.socket(zmq.REP)
     apns_zmqsock.bind("tcp://%s" % apns_zmq_bind)
 except zmq.core.error.ZMQError as e:
-    main_logger("Cannot create ZMQ REP socket for APNS on tcp://%s: %s" % \
-        (apns_zmq_bind, e))
+    main_logger.error("Cannot create ZMQ REP socket for APNS on " \
+        "tcp://%s: %s" % (apns_zmq_bind, e))
     sys.exit(2)
 
 main_logger.info("ZMQ REP socket for GCM service bound on tcp://%s" %
@@ -1782,8 +1782,8 @@ try:
     gcm_zmqsock = zmqctx_r.socket(zmq.REP)
     gcm_zmqsock.bind("tcp://%s" % gcm_zmq_bind)
 except zmq.core.error.ZMQError as e:
-    main_logger("Cannot create ZMQ REP socket for GCM on tcp://%s: %s" % \
-        (gcm_zmq_bind, e))
+    main_logger.error("Cannot create ZMQ REP socket for GCM on " \
+        "tcp://%s: %s" % (gcm_zmq_bind, e))
     sys.exit(2)
 
 #
