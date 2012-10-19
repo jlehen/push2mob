@@ -1550,6 +1550,7 @@ class GCMListener(Listener):
 
         createtime = now()
         uids = []
+        self.pushq.startbatchinsert()
         while len(devtoks) > 0:
             toks = devtoks[:GCMListener._MAXNUMIDS]
             devtoks = devtoks[GCMListener._MAXNUMIDS:]
@@ -1558,6 +1559,7 @@ class GCMListener(Listener):
             self.l.debug("Got notification #%d for %d devices, " \
                 "expiring at %d" % (uid, len(toks), expiry))
             uids.append(str(uid))
+        self.pushq.endbatchinsert()
         return ' '.join(uids)
 
     def _perform_feedback(self):
