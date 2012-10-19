@@ -1580,28 +1580,6 @@ class GCMListener(Listener):
 # Main.
 #############################################################################
 
-try:
-    opts, args = getopt.getopt(sys.argv[1:], "c:h")
-except getopt.GetoptError as e:
-    if len(e.opt) == 0:
-        logging.error("%s" % e.msg)
-    else:
-        logging.error("%s: %s" % (e.msg, e.opt))
-    sys.exit(1)
-
-for o, a in opts:
-    if o == "-c":
-        CONFIGFILE = a
-    elif o == "-h":
-        usage()
-        sys.exit(0)
-    else:
-        assert False, "Unhandled option: %s" % o
-
-#
-# Get configuration.
-#
-
 def parse_loglevel(l):
     loglevels = {
         'debug'   : logging.DEBUG,
@@ -1633,6 +1611,32 @@ def createLogger(name, logfile, level, propagate, formatter):
 logging.basicConfig(level=logging.DEBUG,
     format='%(asctime)s MAIN/%(threadName)s: %(message)s',
     datefmt='%Y/%m/%d %H:%M:%S')
+
+#
+# Parse command-line options.
+#
+
+try:
+    opts, args = getopt.getopt(sys.argv[1:], "c:h")
+except getopt.GetoptError as e:
+    if len(e.opt) == 0:
+        logging.error("%s" % e.msg)
+    else:
+        logging.error("%s: %s" % (e.msg, e.opt))
+    sys.exit(1)
+
+for o, a in opts:
+    if o == "-c":
+        CONFIGFILE = a
+    elif o == "-h":
+        usage()
+        sys.exit(0)
+    else:
+        assert False, "Unhandled option: %s" % o
+
+#
+# Get configuration.
+#
 
 cp = ConfigParser.SafeConfigParser()
 l = cp.read([CONFIGFILE])
@@ -1685,6 +1689,26 @@ if daemon and len(logfile) == 0:
     logging.error("Option main.log_file cannot be empty in daemon mode")
     sys.exit(1)
 
+if apns_devtok_format != 'base64' and apns_devtok_format != 'hex':
+    main_logger.error("%s: Unknown device token format: %s" %
+        (CONFIGFILE, apns_devtok_format))
+    sys.exit(1)
+apns_devtokfmt = DeviceTokenFormater(apns_devtok_format)
+
+#
+# Configure logging.
+#
+
+# Necessary to log uncaught exceptions, if any.
+if len(logfile) == 0:
+    logging.basicConfig(level=logging.DEBUG,
+        format='%(asctime)s MAIN/%(threadName)s: %(message)s',
+        datefmt='%Y/%m/%d %H:%M:%S')
+else:
+    logging.basicConfig(level=logging.DEBUG, filename=logfile,
+        format='%(asctime)s MAIN/%(threadName)s: %(message)s',
+        datefmt='%Y/%m/%d %H:%M:%S')
+
 formatter = logging.Formatter('%(asctime)s %(name)s/%(threadName)s: ' \
     '%(message)s', '%Y/%m/%d %H:%M:%S')
 main_logger = createLogger('push2mob', logfile, loglevel, False, formatter)
@@ -1698,13 +1722,20 @@ apns_logger = createLogger('push2mob.APNS', apns_logfile, apns_loglevel,
 gcm_logger = createLogger('push2mob.GCM', gcm_logfile, gcm_loglevel,
     gcm_logpropagate, formatter)
 
-main_logger.warning("Starting with pid %u..." % os.getpid())
+#
+# Daemonize.
+#
+if daemon:
+    try:
+        pid = os.fork()
+    except OSError as e:
+        main_logger.error("Cannot fork: %s" % e)
+        sys.exit(2)
+    if pid != 0:
+        os._exit(0)
+    os.setsid()
 
-if apns_devtok_format != 'base64' and apns_devtok_format != 'hex':
-    main_logger.error("%s: Unknown device token format: %s" %
-        (CONFIGFILE, apns_devtok_format))
-    sys.exit(1)
-apns_devtokfmt = DeviceTokenFormater(apns_devtok_format)
+main_logger.warning("Starting with pid %u..." % os.getpid())
 
 #
 # Check APNS push/feedback TLS connections.
@@ -1770,19 +1801,6 @@ main_logger.info("%d GCM feedbacks retrieved from persistent storage" %
     gcm_feedbackdb.count())
 
 gcm_expbackoffdb = GCMExponentialBackoffDatabase(gcm_max_retries)
-
-#
-# Daemonize.
-#
-if daemon:
-    try:
-        pid = os.fork()
-    except OSError as e:
-        main_logger.error("Cannot fork: %s" % e)
-        sys.exit(2)
-    if pid != 0:
-        os._exit(0)
-    os.setsid()
 
 #
 # Start APNS ang GCM agent threads and APNS feedback one.
