@@ -855,7 +855,6 @@ class APNSAgent(threading.Thread):
 
             lag = now() - creation
             self.l.info("Notification #%d sent delayed by %.3fs" % (uid, lag))
-            print "1"
 
             if self.maxerrorwait != 0:
                 # Receive a possible error in the preceeding message.
