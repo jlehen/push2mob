@@ -1736,98 +1736,108 @@ if daemon:
         os._exit(0)
     os.setsid()
 
-main_logger.warning("Starting with pid %u..." % os.getpid())
-
-#
-# Check APNS push/feedback TLS connections.
-#
-apns_tlsconnect = TLSConnectionMaker(apns_cacerts, apns_cert, apns_key)
-main_logger.info("Testing APNS push gateway...")
-l = apns_push_gateway.split(':', 2)
-apns_push_gateway = (l[0], int(l[1]))
-s = apns_tlsconnect(apns_push_gateway, 0,
-    "%s: Cannot connect to APNS (%%s:%%d): %%s" % CONFIGFILE)
-if s is None:
-    sys.exit(1)
-s.close()
-
-main_logger.info("Testing APNS feedback gateway...")
-l = apns_feedback_gateway.split(':', 2)
-apns_feedback_gateway = (l[0], int(l[1]))
-apns_feedback_sock = apns_tlsconnect(apns_feedback_gateway, 0,
-    "%s: Cannot connect to APNS feedback service (%%s:%%d): %%s" % CONFIGFILE)
-if apns_feedback_sock is None:
-    sys.exit(1)
-# Do not close it because the APNS feedback service immediately sends
-# something that we don't want to loose.
-
-#
-# Creation ZMQ sockets early so we don't waste other resource if it fails.
-#
-main_logger.info("ZMQ REP socket for APNS service bound on tcp://%s" %
-    apns_zmq_bind)
 try:
-    zmqctx_r = zmq.Context()
-    apns_zmqsock = zmqctx_r.socket(zmq.REP)
-    apns_zmqsock.bind("tcp://%s" % apns_zmq_bind)
-except zmq.core.error.ZMQError as e:
-    main_logger.error("Cannot create ZMQ REP socket for APNS on " \
-        "tcp://%s: %s" % (apns_zmq_bind, e))
-    sys.exit(2)
+    main_logger.warning("Starting with pid %u..." % os.getpid())
 
-main_logger.info("ZMQ REP socket for GCM service bound on tcp://%s" %
-    gcm_zmq_bind)
-try:
-    zmqctx_r = zmq.Context()
-    gcm_zmqsock = zmqctx_r.socket(zmq.REP)
-    gcm_zmqsock.bind("tcp://%s" % gcm_zmq_bind)
-except zmq.core.error.ZMQError as e:
-    main_logger.error("Cannot create ZMQ REP socket for GCM on " \
-        "tcp://%s: %s" % (gcm_zmq_bind, e))
-    sys.exit(2)
+    #
+    # Check APNS push/feedback TLS connections.
+    #
+    apns_tlsconnect = TLSConnectionMaker(apns_cacerts, apns_cert, apns_key)
+    main_logger.info("Testing APNS push gateway...")
+    l = apns_push_gateway.split(':', 2)
+    apns_push_gateway = (l[0], int(l[1]))
+    s = apns_tlsconnect(apns_push_gateway, 0,
+        "%s: Cannot connect to APNS (%%s:%%d): %%s" % CONFIGFILE)
+    if s is None:
+        sys.exit(1)
+    s.close()
 
-#
-# Create persistent queues for notifications and feedback.
-#
-apns_pushq = PersistentFIFO(apns_sqlitedb, 'notifications')
-apns_feedbackq = PersistentFIFO(apns_sqlitedb, 'feedback')
-main_logger.info("%d APNS notifications retrieved from persistent storage" %
-    apns_pushq.qsize())
-main_logger.info("%d APNS feedbacks retrieved from persistent storage" %
-    apns_feedbackq.qsize())
+    main_logger.info("Testing APNS feedback gateway...")
+    l = apns_feedback_gateway.split(':', 2)
+    apns_feedback_gateway = (l[0], int(l[1]))
+    apns_feedback_sock = apns_tlsconnect(apns_feedback_gateway, 0,
+        "%s: Cannot connect to APNS feedback service (%%s:%%d): %%s" % \
+        CONFIGFILE)
+    if apns_feedback_sock is None:
+        sys.exit(1)
+    # Do not close it because the APNS feedback service immediately sends
+    # something that we don't want to loose.
 
-gcm_pushq = ChronologicalPersistentQueue(gcm_sqlitedb, 'notifications')
-gcm_feedbackdb = GCMFeedbackDatabase(gcm_sqlitedb, 'feedback')
-main_logger.info("%d GCM notifications retrieved from persistent storage" %
-    gcm_pushq.qsize())
-main_logger.info("%d GCM feedbacks retrieved from persistent storage" %
-    gcm_feedbackdb.count())
+    #
+    # Creation ZMQ sockets early so we don't waste other resource if it fails.
+    #
+    main_logger.info("ZMQ REP socket for APNS service bound on tcp://%s" %
+        apns_zmq_bind)
+    try:
+        zmqctx_r = zmq.Context()
+        apns_zmqsock = zmqctx_r.socket(zmq.REP)
+        apns_zmqsock.bind("tcp://%s" % apns_zmq_bind)
+    except zmq.core.error.ZMQError as e:
+        main_logger.error("Cannot create ZMQ REP socket for APNS on " \
+            "tcp://%s: %s" % (apns_zmq_bind, e))
+        sys.exit(2)
 
-gcm_expbackoffdb = GCMExponentialBackoffDatabase(gcm_max_retries)
+    main_logger.info("ZMQ REP socket for GCM service bound on tcp://%s" %
+        gcm_zmq_bind)
+    try:
+        zmqctx_r = zmq.Context()
+        gcm_zmqsock = zmqctx_r.socket(zmq.REP)
+        gcm_zmqsock.bind("tcp://%s" % gcm_zmq_bind)
+    except zmq.core.error.ZMQError as e:
+        main_logger.error("Cannot create ZMQ REP socket for GCM on " \
+            "tcp://%s: %s" % (gcm_zmq_bind, e))
+        sys.exit(2)
 
-#
-# Start APNS ang GCM agent threads and APNS feedback one.
-#
-for i in range(apns_push_concurrency):
-    t = APNSAgent(i, apns_logger, apns_devtokfmt, apns_pushq, apns_push_gateway,
-        apns_push_max_error_wait, apns_feedbackq, apns_tlsconnect)
+    #
+    # Create persistent queues for notifications and feedback.
+    #
+    apns_pushq = PersistentFIFO(apns_sqlitedb, 'notifications')
+    apns_feedbackq = PersistentFIFO(apns_sqlitedb, 'feedback')
+    main_logger.info("%d APNS notifications retrieved from persistent storage" %
+        apns_pushq.qsize())
+    main_logger.info("%d APNS feedbacks retrieved from persistent storage" %
+        apns_feedbackq.qsize())
+
+    gcm_pushq = ChronologicalPersistentQueue(gcm_sqlitedb, 'notifications')
+    gcm_feedbackdb = GCMFeedbackDatabase(gcm_sqlitedb, 'feedback')
+    main_logger.info("%d GCM notifications retrieved from persistent storage" %
+        gcm_pushq.qsize())
+    main_logger.info("%d GCM feedbacks retrieved from persistent storage" %
+        gcm_feedbackdb.count())
+
+    gcm_expbackoffdb = GCMExponentialBackoffDatabase(gcm_max_retries)
+
+    #
+    # Start APNS ang GCM agent threads and APNS feedback one.
+    #
+    for i in range(apns_push_concurrency):
+        t = APNSAgent(i, apns_logger, apns_devtokfmt, apns_pushq,
+            apns_push_gateway, apns_push_max_error_wait, apns_feedbackq,
+            apns_tlsconnect)
+        t.start()
+
+    t = APNSFeedbackAgent(0, apns_logger, apns_devtokfmt, apns_feedbackq,
+        apns_feedback_sock, apns_feedback_gateway, apns_feedback_freq,
+        apns_tlsconnect)
     t.start()
 
-t = APNSFeedbackAgent(0, apns_logger, apns_devtokfmt, apns_feedbackq,
-    apns_feedback_sock, apns_feedback_gateway, apns_feedback_freq,
-    apns_tlsconnect)
-t.start()
+    for i in range(gcm_concurrency):
+        t = GCMAgent(i, gcm_logger, gcm_pushq, gcm_server_url, gcm_api_key,
+            gcm_min_interval, gcm_dry_run, gcm_expbackoffdb, gcm_feedbackdb)
+        t.start()
 
-for i in range(gcm_concurrency):
-    t = GCMAgent(i, gcm_logger, gcm_pushq, gcm_server_url, gcm_api_key,
-        gcm_min_interval, gcm_dry_run, gcm_expbackoffdb, gcm_feedbackdb)
+    #
+    # Start APNSListener and GCMListener threads.
+    #
+    t = APNSListener(0, apns_logger, apns_zmqsock, apns_pushq, apns_feedbackq)
     t.start()
+    t = GCMListener(0, gcm_logger, gcm_zmqsock, gcm_pushq, gcm_feedbackdb)
+    # XXX Fix this.
+    t.run()
 
-#
-# Start APNSListener and GCMListener threads.
-#
-t = APNSListener(0, apns_logger, apns_zmqsock, apns_pushq, apns_feedbackq)
-t.start()
-t = GCMListener(0, gcm_logger, gcm_zmqsock, gcm_pushq, gcm_feedbackdb)
-# XXX Fix this.
-t.run()
+except SystemExit:
+    # This exception is raised by sys.exit().
+    pass
+except BaseException as e:
+    main_logger.exception("Uncaugth exception: %s" % e)
+    sys.exit(1)
