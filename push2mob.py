@@ -1749,7 +1749,7 @@ try:
     s = apns_tlsconnect(apns_push_gateway, 0,
         "%s: Cannot connect to APNS (%%s:%%d): %%s" % CONFIGFILE)
     if s is None:
-        sys.exit(1)
+        sys.exit(3)
     s.close()
 
     main_logger.info("Testing APNS feedback gateway...")
@@ -1759,7 +1759,7 @@ try:
         "%s: Cannot connect to APNS feedback service (%%s:%%d): %%s" % \
         CONFIGFILE)
     if apns_feedback_sock is None:
-        sys.exit(1)
+        sys.exit(3)
     # Do not close it because the APNS feedback service immediately sends
     # something that we don't want to loose.
 
@@ -1775,7 +1775,7 @@ try:
     except zmq.core.error.ZMQError as e:
         main_logger.error("Cannot create ZMQ REP socket for APNS on " \
             "tcp://%s: %s" % (apns_zmq_bind, e))
-        sys.exit(2)
+        sys.exit(3)
 
     main_logger.info("ZMQ REP socket for GCM service bound on tcp://%s" %
         gcm_zmq_bind)
@@ -1786,7 +1786,7 @@ try:
     except zmq.core.error.ZMQError as e:
         main_logger.error("Cannot create ZMQ REP socket for GCM on " \
             "tcp://%s: %s" % (gcm_zmq_bind, e))
-        sys.exit(2)
+        sys.exit(3)
 
     #
     # Create persistent queues for notifications and feedback.
@@ -1840,4 +1840,4 @@ except SystemExit:
     pass
 except BaseException as e:
     main_logger.exception("Uncaugth exception: %s" % e)
-    sys.exit(1)
+    sys.exit(99)
