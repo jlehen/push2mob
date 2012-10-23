@@ -1716,17 +1716,6 @@ apns_devtokfmt = DeviceTokenFormater(apns_devtok_format)
 #
 # Configure logging.
 #
-
-# Necessary to log uncaught exceptions, if any.
-if len(logfile) == 0:
-    logging.basicConfig(level=logging.DEBUG,
-        format='%(asctime)s MAIN/%(threadName)s: %(message)s',
-        datefmt='%Y/%m/%d %H:%M:%S')
-else:
-    logging.basicConfig(level=logging.DEBUG, filename=logfile,
-        format='%(asctime)s MAIN/%(threadName)s: %(message)s',
-        datefmt='%Y/%m/%d %H:%M:%S')
-
 formatter = logging.Formatter('%(asctime)s %(name)s/%(threadName)s: ' \
     '%(message)s', '%Y/%m/%d %H:%M:%S')
 main_logger = createLogger('push2mob', logfile, loglevel, False, formatter)
