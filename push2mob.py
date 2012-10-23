@@ -1653,6 +1653,7 @@ try:
         raise Exception("main.log_level: %s" % e)
     apns_zmq_bind = cp.get('apns', 'zmq_bind')
     apns_sqlitedb = cp.get('apns', 'sqlite_db')
+    apns_tableprefix = cp.get('apns', 'table_prefix')
     apns_logfile = cp.get('apns', 'log_file')
     try:
         apns_loglevel = parse_loglevel(cp.get('apns', 'log_level'))
@@ -1671,6 +1672,7 @@ try:
     gcm_zmq_bind = cp.get('gcm', 'zmq_bind')
     gcm_server_url = cp.get('gcm', 'server_url')
     gcm_sqlitedb = cp.get('gcm', 'sqlite_db')
+    gcm_tableprefix = cp.get('gcm', 'table_prefix')
     gcm_logfile = cp.get('gcm', 'log_file')
     try:
         gcm_loglevel = parse_loglevel(cp.get('gcm', 'log_level'))
@@ -1791,15 +1793,19 @@ try:
     #
     # Create persistent queues for notifications and feedback.
     #
-    apns_pushq = PersistentFIFO(apns_sqlitedb, 'notifications')
-    apns_feedbackq = PersistentFIFO(apns_sqlitedb, 'feedback')
+    apns_pushq = PersistentFIFO(apns_sqlitedb, '%s_notifications' %
+        apns_tableprefix)
+    apns_feedbackq = PersistentFIFO(apns_sqlitedb, '%s_feedback' %
+        apns_tableprefix)
     main_logger.info("%d APNS notifications retrieved from persistent storage" %
         apns_pushq.qsize())
     main_logger.info("%d APNS feedbacks retrieved from persistent storage" %
         apns_feedbackq.qsize())
 
-    gcm_pushq = ChronologicalPersistentQueue(gcm_sqlitedb, 'notifications')
-    gcm_feedbackdb = GCMFeedbackDatabase(gcm_sqlitedb, 'feedback')
+    gcm_pushq = ChronologicalPersistentQueue(gcm_sqlitedb, '%s_notifications' %
+        gcm_tableprefix)
+    gcm_feedbackdb = GCMFeedbackDatabase(gcm_sqlitedb, '%s_feedback' %
+        gcm_tableprefix)
     main_logger.info("%d GCM notifications retrieved from persistent storage" %
         gcm_pushq.qsize())
     main_logger.info("%d GCM feedbacks retrieved from persistent storage" %
