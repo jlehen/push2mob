@@ -813,12 +813,17 @@ class APNSAgent(threading.Thread):
 
     def run(self):
         while True:
-            if self.sock is None:
-                timeout = None
-            else:
-                timeout = 1
-            apnsmsg = self.pushq.get(timeout)
-            if apnsmsg is None:
+            timeout = 1
+
+            # The sole purpose of this inner loop is too be able to
+            # progressively increment the timeout.
+            while True:
+                if self.sock is None:
+                    timeout = None
+                apnsmsg = self.pushq.get(timeout)
+                if apnsmsg is not None:
+                    break
+
                 triple = select.select([self.sock], [], [], 0)
                 if len(triple[0]) != 0:
                     self._processerror()
@@ -826,11 +831,11 @@ class APNSAgent(threading.Thread):
                 else:
                     # Try to be generous with APNS and give it enough
                     # time to return is error.
-                    timeout = timeout * 2
-                    if timeout > 10:
+                    timeout = timeout * 2 - timeout / 2 - timeout / 4
+                    if timeout >= 20:
                         timeout = None
                 continue
-                    
+
             uid = apnsmsg.uid
             creation, expiry, devtok, payload = apnsmsg.data
             bintok = base64.standard_b64decode(devtok)
