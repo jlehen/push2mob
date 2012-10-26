@@ -108,31 +108,30 @@ class OrderedPersistentQueue:
     relies on SQLite.
     """
 
-    def __init__(self, sqlite, tablename):
-        self.cv = threading.Condition()
-        self.inbatch = False
-        self.table = tablename
-        self.sqlcon = sqlite3.connect(sqlite, check_same_thread = False)
-        self.sqlcon.isolation_level = None
-        self.sqlcur = self.sqlcon.cursor()
-        cur = self.sqlcur
-        cur.execute(
+    def __init__(self, dbinfo):
+        self.cv = dbinfo.lock
+        self._table = dbinfo.table
+        self._sqlcon = sqlite3.connect(dbinfo.db)
+        self._sqlcon.isolation_level = None
+        self.cv.acquire()
+        self._sqlcon.execute(
             """CREATE TABLE IF NOT EXISTS %s (
             rowid INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
             inuse INTEGER NOT NULL DEFAULT 0,
             ordering REAL NOT NULL,
-            data BLOB);""" % tablename)
-        cur.execute(
+            data BLOB);""" % self._table)
+        self._sqlcon.execute(
             """CREATE INDEX IF NOT EXISTS ordering ON %s (
-            inuse, ordering)""" % tablename)
-        cur.execute(
-            """UPDATE %s SET inuse = 0""" % tablename)
+            inuse, ordering)""" % self._table)
+        self._sqlcon.execute(
+            """UPDATE %s SET inuse = 0""" % self._table)
+        self.cv.release()
 
     def _sqlbegin(self):
-        self.sqlcur.execute("BEGIN")
+        self._sqlcon.execute("BEGIN")
 
     def _sqlend(self):
-        self.sqlcur.execute("END")
+        self._sqlcon.execute("END")
 
     def _sqlput(self, ordering, item):
         """
@@ -141,10 +140,11 @@ class OrderedPersistentQueue:
         This must be called with self.cv locked.
         """
 
-        self.sqlcur.execute(
+        cur = self._sqlcon.cursor()
+        cur.execute(
             """INSERT INTO %s (ordering, data)
-            VALUES(?, ?)""" % self.table, (ordering, str(item)))
-        return self.sqlcur.lastrowid
+            VALUES(?, ?)""" % self._table, (ordering, str(item)))
+        return cur.lastrowid
 
     def _sqlpick(self):
         """
@@ -154,11 +154,12 @@ class OrderedPersistentQueue:
         This must be called with self.cv locked.
         """
 
-        self.sqlcur.execute(
+        cur = self._sqlcon.cursor()
+        cur.execute(
             """SELECT rowid, ordering, data from %s
             WHERE inuse = 0
-            ORDER BY ordering LIMIT 1;""" % self.table)
-        r = self.sqlcur.fetchone()
+            ORDER BY ordering LIMIT 1;""" % self._table)
+        r = cur.fetchone()
         if r is None:
             return None
         return AttributeHolder(uid=r[0], ordering=r[1], data=eval(r[2]))
@@ -170,9 +171,9 @@ class OrderedPersistentQueue:
         This must be called with self.cv locked.
         """
 
-        self.sqlcur.execute(
+        self._sqlcon.execute(
             """UPDATE %s SET inuse = 1
-            WHERE rowid = ?;""" % self.table, (r.uid, ))
+            WHERE rowid = ?;""" % self._table, (r.uid, ))
 
     def _sqlack(self, r):
         """
@@ -182,8 +183,8 @@ class OrderedPersistentQueue:
         """
 
         # XXX Should we only ack grabbed items?
-        self.sqlcur.execute(
-            """DELETE FROM %s WHERE rowid = ?;""" % self.table,
+        self._sqlcon.execute(
+            """DELETE FROM %s WHERE rowid = ?;""" % self._table,
             (r.uid, ))
 
     def _sqlreorder(self, r, ordering):
@@ -193,17 +194,18 @@ class OrderedPersistentQueue:
         This must be called with self.cv locked.
         """
 
-        self.sqlcur.execute(
+        self._sqlcon.execute(
             """UPDATE %s SET ordering = ?, inuse = 0
-            WHERE rowid = ?""" % self.table, (ordering, r.uid))
+            WHERE rowid = ?""" % self._table, (ordering, r.uid))
 
     def _sqlqsize(self):
         """
         Actually reckon the number of elements in the queue.
         """
 
-        self.sqlcur.execute("SELECT COUNT(*) FROM %s" % self.table)
-        r = self.sqlcur.fetchone()
+        cur = self._sqlcon.cursor()
+        cur.execute("SELECT COUNT(*) FROM %s" % self._table)
+        r = cur.fetchone()
         return r[0]
 
     def startbatchinsert(self):
@@ -304,8 +306,8 @@ class ChronologicalPersistentQueue(OrderedPersistentQueue):
 
     _NEGLIGIBLEWAIT = 0.2
 
-    def __init__(self, sqlite, tablename):
-        OrderedPersistentQueue.__init__(self, sqlite, tablename)
+    def __init__(self, dbinfo):
+        OrderedPersistentQueue.__init__(self, dbinfo)
 
     def put(self, when, item):
         """
@@ -359,8 +361,8 @@ class PersistentFIFO(OrderedPersistentQueue):
     There is no need to ack the retrieved objects.
     """
 
-    def __init__(self, sqlite, tablename):
-        OrderedPersistentQueue.__init__(self, sqlite, tablename)
+    def __init__(self, dbinfo):
+        OrderedPersistentQueue.__init__(self, dbinfo)
 
     def put(self, item):
         return OrderedPersistentQueue.put(self, now(), item)
@@ -733,18 +735,18 @@ class APNSAgent(threading.Thread):
         255: "None (unknown)"
     }
 
-    def __init__(self, idx, logger, devtokfmt, pushq, gateway,
-        maxerrorwait, feedbackq, tlsconnect):
+    def __init__(self, idx, logger, devtokfmt, push_dbinfo, gateway,
+        maxerrorwait, feedback_dbinfo, tlsconnect):
 
         threading.Thread.__init__(self)
         self.name = "Agent%d" % idx
         self.daemon = True
         self.l = logger
         self.devtokfmt = devtokfmt
-        self.pushq = pushq
+        self.push_dbinfo = push_dbinfo
         self.gateway = gateway
         self.maxerrorwait = maxerrorwait
-        self.feedbackq = feedbackq
+        self.feedback_dbinfo = feedback_dbinfo
         self.tlsconnect = tlsconnect
         # Tuple: (id, bintok)
         self.recentnotifications = APNSRecentNotifications(maxerrorwait)
@@ -812,6 +814,9 @@ class APNSAgent(threading.Thread):
         return r
 
     def run(self):
+        self.pushq = PersistentFIFO(self.push_dbinfo)
+        self.feedbackq = PersistentFIFO(self.feedback_dbinfo)
+
         while True:
             timeout = 1
 
@@ -891,15 +896,15 @@ class APNSFeedbackAgent(threading.Thread):
     creates feedback entries for it.
     """
 
-    def __init__(self, idx, logger, devtokfmt, feedbackq, sock, gateway, frequency,
-        tlsconnect):
+    def __init__(self, idx, logger, devtokfmt, feedback_dbinfo, sock, gateway,
+        frequency, tlsconnect):
         threading.Thread.__init__(self)
         self.name = "Feedback%d" % idx
         self.daemon = True
         self.sock = sock
         self.l = logger
         self.devtokfmt = devtokfmt
-        self.feedbackq = feedbackq
+        self.feedback_dbinfo = feedback_dbinfo
         self.gateway = gateway
         self.frequency = frequency
         self.tlsconnect = tlsconnect
@@ -912,6 +917,8 @@ class APNSFeedbackAgent(threading.Thread):
         self.sock = None
 
     def run(self):
+        self.feedbackq = PersistentFIFO(self.feedback_dbinfo)
+
         while True:
             # self.sock is not None on the first run because we
             # inherits the socket from the main thread (which has
@@ -963,12 +970,12 @@ class APNSListener(Listener):
 
     _PAYLOADMAXLEN = 256
 
-    def __init__(self, idx, logger, zmqsock, pushq, feedbackq):
+    def __init__(self, idx, logger, zmqsock, push_dbinfo, feedback_dbinfo):
         Listener.__init__(self, idx, logger, zmqsock)
         self.name = "Listener%d" % idx
         self.l = logger
-        self.pushq = pushq
-        self.feedbackq = feedbackq
+        self.push_dbinfo = push_dbinfo
+        self.feedback_dbinfo = feedback_dbinfo
 
     def _parse_send(self, msg):
         arglist, devtoks, payload = Listener._parse_send_args(self, 1, msg)
@@ -1044,6 +1051,11 @@ class APNSListener(Listener):
             feedbacks.append("%s:%s" % (timestamp, devtok))
         return ' '.join(feedbacks)
 
+    def run(self):
+        self.pushq = PersistentFIFO(self.push_dbinfo)
+        self.feedbackq = PersistentFIFO(self.feedback_dbinfo)
+        Listener.run(self)
+
 
 #############################################################################
 # GCM stuff.
@@ -1065,13 +1077,13 @@ class GCMFeedbackDatabase:
     NOTREGISTERED = 2
     INVALID = 3
 
-    def __init__(self, sqlite, tablename):
-        self.mutex = threading.Lock()
+    def __init__(self, feedback_dbinfo):
+        self.mutex = feedback_dbinfo.lock
         self.tstamp = 0
         self.flushafter = GCMFeedbackDatabase._FLUSHAFTER
 
-        self.table = tablename
-        self.sqlcon = sqlite3.connect(sqlite, check_same_thread = False)
+        self.table = feedback_dbinfo.table
+        self.sqlcon = sqlite3.connect(feedback_dbinfo.db)
         self.sqlcon.isolation_level = None
         self.sqlcur = self.sqlcon.cursor()
         self.sqlcur.execute(
@@ -1079,10 +1091,10 @@ class GCMFeedbackDatabase:
             regid VARCHAR(256) PRIMARY KEY NOT NULL,
             state INTEGER NOT NULL DEFAULT 0,
             newregid VARCHAR(256),
-            retrievetime REAL NOT NULL DEFAULT 0)""" % tablename)
+            retrievetime REAL NOT NULL DEFAULT 0)""" % self.table)
         self.sqlcur.execute(
             """CREATE INDEX IF NOT EXISTS regid_retrtime ON %s (
-            regid, retrievetime)""" % tablename)
+            regid, retrievetime)""" % self.table)
 
     def _update(self, regid, state, newregid):
 
@@ -1279,21 +1291,24 @@ class GCMAgent(threading.Thread):
         'MissingCollapseKey'    : 'Missing Collapse Key'
     }
 
-    def __init__(self, idx, logger, pushq, server_url, api_key,
-        min_interval, dry_run, expbackoffdb, feedbackdb):
+    def __init__(self, idx, logger, push_dbinfo, server_url, api_key,
+        min_interval, dry_run, expbackoffdb, feedback_dbinfo):
 
         threading.Thread.__init__(self)
         self.name = "Agent%d" % idx
         self.daemon = True
         self.l = logger
-        self.pushq = pushq
+        self.push_dbinfo = push_dbinfo
         self.gcmreq = GCMHTTPRequest(server_url, api_key)
         self.mininterval = min_interval
         self.dryrun = dry_run
         self.expbackoffdb = expbackoffdb
-        self.feedbackdb = feedbackdb
+        self.feedback_dbinfo = feedback_dbinfo
 
     def run(self):
+        self.pushq = ChronologicalPersistentQueue(self.push_dbinfo)
+        self.feedbackdb = GCMFeedbackDatabase(self.feedback_dbinfo)
+
         needsleep = 0
         gcmmsg = None
         while True:
@@ -1488,12 +1503,12 @@ class GCMListener(Listener):
     _MAXTTL = 2419200       # 4 weeks
     _PAYLOADMAXLEN = 4096
 
-    def __init__(self, idx, logger, zmqsock, pushq, idschanges):
+    def __init__(self, idx, logger, zmqsock, push_dbinfo, feedback_dbinfo):
         Listener.__init__(self, idx, logger, zmqsock)
         self.name = "Listener%d" % idx
         self.l = logger
-        self.pushq = pushq
-        self.idschanges = idschanges
+        self.push_dbinfo = push_dbinfo
+        self.feedback_dbinfo = feedback_dbinfo
 
     def _parse_send(self, msg):
         arglist, ids, payload = Listener._parse_send_args(self, 3, msg)
@@ -1595,6 +1610,11 @@ class GCMListener(Listener):
             s = "%s:%s:%s" % (str(t[0]), s, str(t[2]))
             feedbacks[i] = s
         return ' '.join(feedbacks)
+
+    def run(self):
+        self.pushq = ChronologicalPersistentQueue(self.push_dbinfo)
+        self.idschanges = GCMFeedbackDatabase(self.feedback_dbinfo)
+        Listener.run(self)
 
 
 #############################################################################
@@ -1802,23 +1822,35 @@ try:
     #
     # Create persistent queues for notifications and feedback.
     #
-    apns_pushq = PersistentFIFO(apns_sqlitedb, '%s_notifications' %
-        apns_tableprefix)
-    apns_feedbackq = PersistentFIFO(apns_sqlitedb, '%s_feedback' %
-        apns_tableprefix)
-    main_logger.info("%d APNS notifications retrieved from persistent storage" %
-        apns_pushq.qsize())
-    main_logger.info("%d APNS feedbacks retrieved from persistent storage" %
-        apns_feedbackq.qsize())
+    apns_push_dbinfo = AttributeHolder(db=apns_sqlitedb,
+        table=('%s_notifications' % apns_tableprefix),
+        lock=threading.Condition())
+    apns_feedback_dbinfo = AttributeHolder(db=apns_sqlitedb,
+        table=('%s_feedback' % apns_tableprefix),
+        lock=threading.Condition())
+    gcm_push_dbinfo = AttributeHolder(db=gcm_sqlitedb,
+        table=('%s_notifications' % gcm_tableprefix),
+        lock=threading.Condition())
+    gcm_feedback_dbinfo = AttributeHolder(db=gcm_sqlitedb,
+        table='%s_feedback' % gcm_tableprefix,
+        lock=threading.Lock())
 
-    gcm_pushq = ChronologicalPersistentQueue(gcm_sqlitedb, '%s_notifications' %
-        gcm_tableprefix)
-    gcm_feedbackdb = GCMFeedbackDatabase(gcm_sqlitedb, '%s_feedback' %
-        gcm_tableprefix)
+    q = PersistentFIFO(apns_push_dbinfo)
+    main_logger.info("%d APNS notifications retrieved from persistent storage" %
+        q.qsize())
+    del q
+    q = PersistentFIFO(apns_feedback_dbinfo)
+    main_logger.info("%d APNS feedbacks retrieved from persistent storage" %
+        q.qsize())
+    del q
+    q = ChronologicalPersistentQueue(gcm_push_dbinfo)
     main_logger.info("%d GCM notifications retrieved from persistent storage" %
-        gcm_pushq.qsize())
+        q.qsize())
+    del q
+    db = GCMFeedbackDatabase(gcm_feedback_dbinfo)
     main_logger.info("%d GCM feedbacks retrieved from persistent storage" %
-        gcm_feedbackdb.count())
+        db.count())
+    del db
 
     gcm_expbackoffdb = GCMExponentialBackoffDatabase(gcm_max_retries)
 
@@ -1826,27 +1858,30 @@ try:
     # Start APNS ang GCM agent threads and APNS feedback one.
     #
     for i in range(apns_push_concurrency):
-        t = APNSAgent(i, apns_logger, apns_devtokfmt, apns_pushq,
-            apns_push_gateway, apns_push_max_error_wait, apns_feedbackq,
-            apns_tlsconnect)
+        t = APNSAgent(i, apns_logger, apns_devtokfmt, apns_push_dbinfo,
+            apns_push_gateway, apns_push_max_error_wait,
+            apns_feedback_dbinfo, apns_tlsconnect)
         t.start()
 
-    t = APNSFeedbackAgent(0, apns_logger, apns_devtokfmt, apns_feedbackq,
-        apns_feedback_sock, apns_feedback_gateway, apns_feedback_freq,
-        apns_tlsconnect)
+    t = APNSFeedbackAgent(0, apns_logger, apns_devtokfmt,
+        apns_feedback_dbinfo, apns_feedback_sock, apns_feedback_gateway,
+        apns_feedback_freq, apns_tlsconnect)
     t.start()
 
     for i in range(gcm_concurrency):
-        t = GCMAgent(i, gcm_logger, gcm_pushq, gcm_server_url, gcm_api_key,
-            gcm_min_interval, gcm_dry_run, gcm_expbackoffdb, gcm_feedbackdb)
+        t = GCMAgent(i, gcm_logger, gcm_push_dbinfo, gcm_server_url,
+            gcm_api_key, gcm_min_interval, gcm_dry_run, gcm_expbackoffdb,
+            gcm_feedback_dbinfo)
         t.start()
 
     #
     # Start APNSListener and GCMListener threads.
     #
-    t = APNSListener(0, apns_logger, apns_zmqsock, apns_pushq, apns_feedbackq)
+    t = APNSListener(0, apns_logger, apns_zmqsock, apns_push_dbinfo,
+        apns_feedback_dbinfo)
     t.start()
-    t = GCMListener(0, gcm_logger, gcm_zmqsock, gcm_pushq, gcm_feedbackdb)
+    t = GCMListener(0, gcm_logger, gcm_zmqsock, gcm_push_dbinfo,
+        gcm_feedback_dbinfo)
     # XXX Fix this.
     t.run()
 
