@@ -20,13 +20,15 @@ honor GCM feedback while the client application has not retrieved it.
 
 Besides, asynchronous pushes allow the client application to return
 immediately without waiting for all notifications to be sent; push2mob
-will just do it right (there is not much way to stray anyhow).  This is
+will just do it right (there is not many ways to stray anyhow).  This is
 especially relevant for APNS where every single device must be addressed
 individually.
 
 ZeroMQ protocol has been chosen because it allows very simple network
 programming.  It abstracts away all the socket dance one has to do when
-writing a networked application.
+writing a networked application.  Additionally, this means any language
+can be used as long as ZeroMQ bindings exist for it (all major scripting
+and compiled languages are supported and more).
 
 The ZeroMQ REQ/REP semantic enforces an even simpler programming model:
 the client application sends request and then receives a reply.  Any
