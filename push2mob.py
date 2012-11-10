@@ -929,7 +929,7 @@ class APNSAgent(threading.Thread):
                     self._processerror()
                     trial = trial + 1
                     self.l.debug("Retry (%d) to send notification "
-                        "#%d to %s: %s" %
+                        "#%d to %s (previous attempt failed with: %s)" %
                         (trial, uid, self.devtokfmt(bintok), e))
                     self._connect()
                     continue
