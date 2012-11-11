@@ -400,8 +400,18 @@ class TLSConnectionMaker:
         creating a connection.
         """
         self.cacerts = cacerts
+        self.certreq = ssl.CERT_REQUIRED
+        if len(cacerts.strip()) == 0:
+            self.cacerts = None
+            self.certreq = ssl.CERT_NONE
+
         self.cert = cert
+        if len(cert.strip()) == 0:
+            self.cert = None
+
         self.key = key
+        if len(key.strip()) == 0:
+            self.key = None
 
     def __call__(self, peer, sleeptime, errorstring):
         """
@@ -415,7 +425,7 @@ class TLSConnectionMaker:
                 s = socket.socket(ai[0][0], ai[0][1], ai[0][2])
                 sslsock = ssl.wrap_socket(s, keyfile=self.key,
                     certfile=self.cert, server_side=False,
-                    cert_reqs=ssl.CERT_REQUIRED, ca_certs=self.cacerts)
+                    cert_reqs=self.certreq, ca_certs=self.cacerts)
                 sslsock.connect(ai[0][4])
                 break
             except socket.gaierror as e:
