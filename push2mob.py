@@ -1658,246 +1658,248 @@ def createLogger(name, logfile, level, propagate, formatter):
     logger.addHandler(handler)
     return logger
 
-# For early log messages.
-logging.basicConfig(level=logging.DEBUG,
-    format='%(asctime)s MAIN/%(threadName)s: %(message)s',
-    datefmt='%Y/%m/%d %H:%M:%S')
+if __name__ == "__main__":
+    # For early log messages.
+    logging.basicConfig(level=logging.DEBUG,
+        format='%(asctime)s MAIN/%(threadName)s: %(message)s',
+        datefmt='%Y/%m/%d %H:%M:%S')
 
-#
-# Parse command-line options.
-#
+    #
+    # Parse command-line options.
+    #
 
-try:
-    opts, args = getopt.getopt(sys.argv[1:], "c:h")
-except getopt.GetoptError as e:
-    if len(e.opt) == 0:
-        logging.error("%s" % e.msg)
-    else:
-        logging.error("%s: %s" % (e.msg, e.opt))
-    sys.exit(1)
-
-for o, a in opts:
-    if o == "-c":
-        CONFIGFILE = a
-    elif o == "-h":
-        usage()
-        sys.exit(0)
-    else:
-        assert False, "Unhandled option: %s" % o
-
-#
-# Get configuration.
-#
-
-cp = ConfigParser.SafeConfigParser()
-l = cp.read([CONFIGFILE])
-if len(l) == 0:
-    raise Exception("Cannot open '%s'" % CONFIGFILE)
-
-try:
-    daemon = cp.getboolean('main', 'daemon')
-    logfile = cp.get('main', 'log_file')
     try:
-        loglevel = parse_loglevel(cp.get('main', 'log_level'))
-    except Exception as e:
-        raise Exception("main.log_level: %s" % e)
-    apns_zmq_bind = cp.get('apns', 'zmq_bind')
-    apns_sqlitedb = cp.get('apns', 'sqlite_db')
-    apns_tableprefix = cp.get('apns', 'table_prefix')
-    apns_logfile = cp.get('apns', 'log_file')
+        opts, args = getopt.getopt(sys.argv[1:], "c:h")
+    except getopt.GetoptError as e:
+        if len(e.opt) == 0:
+            logging.error("%s" % e.msg)
+        else:
+            logging.error("%s: %s" % (e.msg, e.opt))
+        sys.exit(1)
+
+    for o, a in opts:
+        if o == "-c":
+            CONFIGFILE = a
+        elif o == "-h":
+            usage()
+            sys.exit(0)
+        else:
+            assert False, "Unhandled option: %s" % o
+
+    #
+    # Get configuration.
+    #
+
+    cp = ConfigParser.SafeConfigParser()
+    l = cp.read([CONFIGFILE])
+    if len(l) == 0:
+        raise Exception("Cannot open '%s'" % CONFIGFILE)
+
     try:
-        apns_loglevel = parse_loglevel(cp.get('apns', 'log_level'))
-    except Exception as e:
-        raise Exception("apns.log_level: %s" % e)
-    apns_logpropagate = cp.getboolean('apns', 'log_propagate')
-    apns_cacerts = cp.get('apns', 'cacerts_file')
-    apns_cert = cp.get('apns', 'cert_file')
-    apns_key = cp.get('apns', 'key_file')
-    apns_devtok_format = cp.get('apns', 'device_token_format')
-    apns_push_gateway = cp.get('apns', 'push_gateway')
-    apns_push_concurrency = cp.getint('apns', 'push_concurrency')
-    apns_push_max_error_wait = cp.getfloat('apns', 'push_max_error_wait')
-    apns_feedback_gateway = cp.get('apns', 'feedback_gateway')
-    apns_feedback_freq = cp.getfloat('apns', 'feedback_frequency')
-    gcm_zmq_bind = cp.get('gcm', 'zmq_bind')
-    gcm_server_url = cp.get('gcm', 'server_url')
-    gcm_sqlitedb = cp.get('gcm', 'sqlite_db')
-    gcm_tableprefix = cp.get('gcm', 'table_prefix')
-    gcm_logfile = cp.get('gcm', 'log_file')
+        daemon = cp.getboolean('main', 'daemon')
+        logfile = cp.get('main', 'log_file')
+        try:
+            loglevel = parse_loglevel(cp.get('main', 'log_level'))
+        except Exception as e:
+            raise Exception("main.log_level: %s" % e)
+        apns_zmq_bind = cp.get('apns', 'zmq_bind')
+        apns_sqlitedb = cp.get('apns', 'sqlite_db')
+        apns_tableprefix = cp.get('apns', 'table_prefix')
+        apns_logfile = cp.get('apns', 'log_file')
+        try:
+            apns_loglevel = parse_loglevel(cp.get('apns', 'log_level'))
+        except Exception as e:
+            raise Exception("apns.log_level: %s" % e)
+        apns_logpropagate = cp.getboolean('apns', 'log_propagate')
+        apns_cacerts = cp.get('apns', 'cacerts_file')
+        apns_cert = cp.get('apns', 'cert_file')
+        apns_key = cp.get('apns', 'key_file')
+        apns_devtok_format = cp.get('apns', 'device_token_format')
+        apns_push_gateway = cp.get('apns', 'push_gateway')
+        apns_push_concurrency = cp.getint('apns', 'push_concurrency')
+        apns_push_max_error_wait = cp.getfloat('apns', 'push_max_error_wait')
+        apns_feedback_gateway = cp.get('apns', 'feedback_gateway')
+        apns_feedback_freq = cp.getfloat('apns', 'feedback_frequency')
+        gcm_zmq_bind = cp.get('gcm', 'zmq_bind')
+        gcm_server_url = cp.get('gcm', 'server_url')
+        gcm_sqlitedb = cp.get('gcm', 'sqlite_db')
+        gcm_tableprefix = cp.get('gcm', 'table_prefix')
+        gcm_logfile = cp.get('gcm', 'log_file')
+        try:
+            gcm_loglevel = parse_loglevel(cp.get('gcm', 'log_level'))
+        except Exception as e:
+            raise Exception("gcm.log_level: %s" % e)
+        gcm_logpropagate = cp.getboolean('gcm', 'log_propagate')
+        gcm_api_key = cp.get('gcm', 'api_key')
+        gcm_concurrency = cp.getint('gcm', 'concurrency')
+        gcm_max_retries = cp.getint('gcm', 'max_retries')
+        gcm_min_interval = cp.getfloat('gcm', 'min_interval')
+        gcm_dry_run = cp.getboolean('gcm', 'dry_run')
+    except BaseException as e:
+        logging.error("%s: %s" % (CONFIGFILE, e))
+        sys.exit(1)
+
+    if daemon and len(logfile) == 0:
+        logging.error("Option main.log_file cannot be empty in daemon mode")
+        sys.exit(1)
+
+    if apns_devtok_format != 'base64' and apns_devtok_format != 'hex':
+        main_logger.error("%s: Unknown device token format: %s" %
+            (CONFIGFILE, apns_devtok_format))
+        sys.exit(1)
+    apns_devtokfmt = DeviceTokenFormater(apns_devtok_format)
+
+    #
+    # Configure logging.
+    #
+    formatter = logging.Formatter('%(asctime)s %(name)s/%(threadName)s: ' \
+        '%(message)s', '%Y/%m/%d %H:%M:%S')
+    main_logger = createLogger('push2mob', logfile, loglevel, False, formatter)
+    main_logger.propagate = False
+    if not daemon:
+        handler = logging.StreamHandler()
+        handler.setFormatter(formatter)
+        main_logger.addHandler(handler)
+    apns_logger = createLogger('push2mob.APNS', apns_logfile, apns_loglevel,
+        apns_logpropagate, formatter)
+    gcm_logger = createLogger('push2mob.GCM', gcm_logfile, gcm_loglevel,
+        gcm_logpropagate, formatter)
+
+    #
+    # Daemonize.
+    #
+    if daemon:
+        try:
+            pid = os.fork()
+        except OSError as e:
+            main_logger.error("Cannot fork: %s" % e)
+            sys.exit(2)
+        if pid != 0:
+            os._exit(0)
+        os.setsid()
+
     try:
-        gcm_loglevel = parse_loglevel(cp.get('gcm', 'log_level'))
-    except Exception as e:
-        raise Exception("gcm.log_level: %s" % e)
-    gcm_logpropagate = cp.getboolean('gcm', 'log_propagate')
-    gcm_api_key = cp.get('gcm', 'api_key')
-    gcm_concurrency = cp.getint('gcm', 'concurrency')
-    gcm_max_retries = cp.getint('gcm', 'max_retries')
-    gcm_min_interval = cp.getfloat('gcm', 'min_interval')
-    gcm_dry_run = cp.getboolean('gcm', 'dry_run')
-except BaseException as e:
-    logging.error("%s: %s" % (CONFIGFILE, e))
-    sys.exit(1)
+        main_logger.warning("Starting with pid %u..." % os.getpid())
 
-if daemon and len(logfile) == 0:
-    logging.error("Option main.log_file cannot be empty in daemon mode")
-    sys.exit(1)
+        #
+        # Check APNS push/feedback TLS connections.
+        #
+        apns_tlsconnect = TLSConnectionMaker(apns_cacerts, apns_cert, apns_key)
+        main_logger.info("Testing APNS push gateway...")
+        l = apns_push_gateway.split(':', 2)
+        apns_push_gateway = (l[0], int(l[1]))
+        s = apns_tlsconnect(apns_push_gateway, 0,
+            "%s: Cannot connect to APNS (%%s:%%d): %%s" % CONFIGFILE)
+        if s is None:
+            sys.exit(3)
+        s.close()
 
-if apns_devtok_format != 'base64' and apns_devtok_format != 'hex':
-    main_logger.error("%s: Unknown device token format: %s" %
-        (CONFIGFILE, apns_devtok_format))
-    sys.exit(1)
-apns_devtokfmt = DeviceTokenFormater(apns_devtok_format)
+        main_logger.info("Testing APNS feedback gateway...")
+        l = apns_feedback_gateway.split(':', 2)
+        apns_feedback_gateway = (l[0], int(l[1]))
+        apns_feedback_sock = apns_tlsconnect(apns_feedback_gateway, 0,
+            "%s: Cannot connect to APNS feedback service (%%s:%%d): %%s" % \
+            CONFIGFILE)
+        if apns_feedback_sock is None:
+            sys.exit(3)
+        # Do not close it because the APNS feedback service immediately sends
+        # something that we don't want to loose.
 
-#
-# Configure logging.
-#
-formatter = logging.Formatter('%(asctime)s %(name)s/%(threadName)s: ' \
-    '%(message)s', '%Y/%m/%d %H:%M:%S')
-main_logger = createLogger('push2mob', logfile, loglevel, False, formatter)
-main_logger.propagate = False
-if not daemon:
-    handler = logging.StreamHandler()
-    handler.setFormatter(formatter)
-    main_logger.addHandler(handler)
-apns_logger = createLogger('push2mob.APNS', apns_logfile, apns_loglevel,
-    apns_logpropagate, formatter)
-gcm_logger = createLogger('push2mob.GCM', gcm_logfile, gcm_loglevel,
-    gcm_logpropagate, formatter)
+        #
+        # Creation ZMQ sockets early so we don't waste other resource
+        # if it fails.
+        #
+        main_logger.info("ZMQ REP socket for APNS service bound on tcp://%s" %
+            apns_zmq_bind)
+        try:
+            zmqctx_r = zmq.Context()
+            apns_zmqsock = zmqctx_r.socket(zmq.REP)
+            apns_zmqsock.bind("tcp://%s" % apns_zmq_bind)
+        except zmq.core.error.ZMQError as e:
+            main_logger.error("Cannot create ZMQ REP socket for APNS on " \
+                "tcp://%s: %s" % (apns_zmq_bind, e))
+            sys.exit(3)
 
-#
-# Daemonize.
-#
-if daemon:
-    try:
-        pid = os.fork()
-    except OSError as e:
-        main_logger.error("Cannot fork: %s" % e)
-        sys.exit(2)
-    if pid != 0:
-        os._exit(0)
-    os.setsid()
+        main_logger.info("ZMQ REP socket for GCM service bound on tcp://%s" %
+            gcm_zmq_bind)
+        try:
+            zmqctx_r = zmq.Context()
+            gcm_zmqsock = zmqctx_r.socket(zmq.REP)
+            gcm_zmqsock.bind("tcp://%s" % gcm_zmq_bind)
+        except zmq.core.error.ZMQError as e:
+            main_logger.error("Cannot create ZMQ REP socket for GCM on " \
+                "tcp://%s: %s" % (gcm_zmq_bind, e))
+            sys.exit(3)
 
-try:
-    main_logger.warning("Starting with pid %u..." % os.getpid())
+        #
+        # Create persistent queues for notifications and feedback.
+        #
+        apns_push_dbinfo = AttributeHolder(db=apns_sqlitedb,
+            table=('%s_notifications' % apns_tableprefix),
+            lock=threading.Condition())
+        apns_feedback_dbinfo = AttributeHolder(db=apns_sqlitedb,
+            table=('%s_feedback' % apns_tableprefix),
+            lock=threading.Condition())
+        gcm_push_dbinfo = AttributeHolder(db=gcm_sqlitedb,
+            table=('%s_notifications' % gcm_tableprefix),
+            lock=threading.Condition())
+        gcm_feedback_dbinfo = AttributeHolder(db=gcm_sqlitedb,
+            table='%s_feedback' % gcm_tableprefix,
+            lock=threading.Lock())
 
-    #
-    # Check APNS push/feedback TLS connections.
-    #
-    apns_tlsconnect = TLSConnectionMaker(apns_cacerts, apns_cert, apns_key)
-    main_logger.info("Testing APNS push gateway...")
-    l = apns_push_gateway.split(':', 2)
-    apns_push_gateway = (l[0], int(l[1]))
-    s = apns_tlsconnect(apns_push_gateway, 0,
-        "%s: Cannot connect to APNS (%%s:%%d): %%s" % CONFIGFILE)
-    if s is None:
-        sys.exit(3)
-    s.close()
+        q = PersistentFIFO(apns_push_dbinfo)
+        main_logger.info("%d APNS notifications retrieved from persistent " \
+            "storage" % q.qsize())
+        del q
+        q = PersistentFIFO(apns_feedback_dbinfo)
+        main_logger.info("%d APNS feedbacks retrieved from persistent " \
+            "storage" % q.qsize())
+        del q
+        q = ChronologicalPersistentQueue(gcm_push_dbinfo)
+        main_logger.info("%d GCM notifications retrieved from persistent " \
+            "storage" % q.qsize())
+        del q
+        db = GCMFeedbackDatabase(gcm_feedback_dbinfo)
+        main_logger.info("%d GCM feedbacks retrieved from persistent " \
+            "storage" % db.count())
+        del db
 
-    main_logger.info("Testing APNS feedback gateway...")
-    l = apns_feedback_gateway.split(':', 2)
-    apns_feedback_gateway = (l[0], int(l[1]))
-    apns_feedback_sock = apns_tlsconnect(apns_feedback_gateway, 0,
-        "%s: Cannot connect to APNS feedback service (%%s:%%d): %%s" % \
-        CONFIGFILE)
-    if apns_feedback_sock is None:
-        sys.exit(3)
-    # Do not close it because the APNS feedback service immediately sends
-    # something that we don't want to loose.
+        gcm_expbackoffdb = GCMExponentialBackoffDatabase(gcm_max_retries)
 
-    #
-    # Creation ZMQ sockets early so we don't waste other resource if it fails.
-    #
-    main_logger.info("ZMQ REP socket for APNS service bound on tcp://%s" %
-        apns_zmq_bind)
-    try:
-        zmqctx_r = zmq.Context()
-        apns_zmqsock = zmqctx_r.socket(zmq.REP)
-        apns_zmqsock.bind("tcp://%s" % apns_zmq_bind)
-    except zmq.core.error.ZMQError as e:
-        main_logger.error("Cannot create ZMQ REP socket for APNS on " \
-            "tcp://%s: %s" % (apns_zmq_bind, e))
-        sys.exit(3)
+        #
+        # Start APNS ang GCM agent threads and APNS feedback one.
+        #
+        for i in range(apns_push_concurrency):
+            t = APNSAgent(i, apns_logger, apns_devtokfmt, apns_push_dbinfo,
+                apns_push_gateway, apns_push_max_error_wait,
+                apns_feedback_dbinfo, apns_tlsconnect)
+            t.start()
 
-    main_logger.info("ZMQ REP socket for GCM service bound on tcp://%s" %
-        gcm_zmq_bind)
-    try:
-        zmqctx_r = zmq.Context()
-        gcm_zmqsock = zmqctx_r.socket(zmq.REP)
-        gcm_zmqsock.bind("tcp://%s" % gcm_zmq_bind)
-    except zmq.core.error.ZMQError as e:
-        main_logger.error("Cannot create ZMQ REP socket for GCM on " \
-            "tcp://%s: %s" % (gcm_zmq_bind, e))
-        sys.exit(3)
-
-    #
-    # Create persistent queues for notifications and feedback.
-    #
-    apns_push_dbinfo = AttributeHolder(db=apns_sqlitedb,
-        table=('%s_notifications' % apns_tableprefix),
-        lock=threading.Condition())
-    apns_feedback_dbinfo = AttributeHolder(db=apns_sqlitedb,
-        table=('%s_feedback' % apns_tableprefix),
-        lock=threading.Condition())
-    gcm_push_dbinfo = AttributeHolder(db=gcm_sqlitedb,
-        table=('%s_notifications' % gcm_tableprefix),
-        lock=threading.Condition())
-    gcm_feedback_dbinfo = AttributeHolder(db=gcm_sqlitedb,
-        table='%s_feedback' % gcm_tableprefix,
-        lock=threading.Lock())
-
-    q = PersistentFIFO(apns_push_dbinfo)
-    main_logger.info("%d APNS notifications retrieved from persistent storage" %
-        q.qsize())
-    del q
-    q = PersistentFIFO(apns_feedback_dbinfo)
-    main_logger.info("%d APNS feedbacks retrieved from persistent storage" %
-        q.qsize())
-    del q
-    q = ChronologicalPersistentQueue(gcm_push_dbinfo)
-    main_logger.info("%d GCM notifications retrieved from persistent storage" %
-        q.qsize())
-    del q
-    db = GCMFeedbackDatabase(gcm_feedback_dbinfo)
-    main_logger.info("%d GCM feedbacks retrieved from persistent storage" %
-        db.count())
-    del db
-
-    gcm_expbackoffdb = GCMExponentialBackoffDatabase(gcm_max_retries)
-
-    #
-    # Start APNS ang GCM agent threads and APNS feedback one.
-    #
-    for i in range(apns_push_concurrency):
-        t = APNSAgent(i, apns_logger, apns_devtokfmt, apns_push_dbinfo,
-            apns_push_gateway, apns_push_max_error_wait,
-            apns_feedback_dbinfo, apns_tlsconnect)
+        t = APNSFeedbackAgent(0, apns_logger, apns_devtokfmt,
+            apns_feedback_dbinfo, apns_feedback_sock, apns_feedback_gateway,
+            apns_feedback_freq, apns_tlsconnect)
         t.start()
 
-    t = APNSFeedbackAgent(0, apns_logger, apns_devtokfmt,
-        apns_feedback_dbinfo, apns_feedback_sock, apns_feedback_gateway,
-        apns_feedback_freq, apns_tlsconnect)
-    t.start()
+        for i in range(gcm_concurrency):
+            t = GCMAgent(i, gcm_logger, gcm_push_dbinfo, gcm_server_url,
+                gcm_api_key, gcm_min_interval, gcm_dry_run, gcm_expbackoffdb,
+                gcm_feedback_dbinfo)
+            t.start()
 
-    for i in range(gcm_concurrency):
-        t = GCMAgent(i, gcm_logger, gcm_push_dbinfo, gcm_server_url,
-            gcm_api_key, gcm_min_interval, gcm_dry_run, gcm_expbackoffdb,
+        #
+        # Start APNSListener and GCMListener threads.
+        #
+        t = APNSListener(0, apns_logger, apns_zmqsock, apns_push_dbinfo,
+            apns_feedback_dbinfo)
+        t.start()
+        t = GCMListener(0, gcm_logger, gcm_zmqsock, gcm_push_dbinfo,
             gcm_feedback_dbinfo)
-        t.start()
+        # XXX Fix this.
+        t.run()
 
-    #
-    # Start APNSListener and GCMListener threads.
-    #
-    t = APNSListener(0, apns_logger, apns_zmqsock, apns_push_dbinfo,
-        apns_feedback_dbinfo)
-    t.start()
-    t = GCMListener(0, gcm_logger, gcm_zmqsock, gcm_push_dbinfo,
-        gcm_feedback_dbinfo)
-    # XXX Fix this.
-    t.run()
-
-except SystemExit:
-    # This exception is raised by sys.exit().
-    pass
-except BaseException as e:
-    main_logger.exception("Uncaugth exception: %s" % e)
-    sys.exit(99)
+    except SystemExit:
+        # This exception is raised by sys.exit().
+        pass
+    except BaseException as e:
+        main_logger.exception("Uncaugth exception: %s" % e)
+        sys.exit(99)
