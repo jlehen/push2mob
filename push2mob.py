@@ -341,8 +341,8 @@ class ChronologicalPersistentQueue(OrderedPersistentQueue):
         """
 
         with Locker(self.cv):
-            r = self._peek()
             while True:
+                r = self._peek()
                 timedelta = r.ordering - now()
                 if timedelta >= self.__class__._NEGLIGIBLEWAIT:
                     self.cv.wait(timedelta)
