@@ -113,6 +113,7 @@ class OrderedPersistentQueue:
         self._table = dbinfo.table
         self._sqlcon = sqlite3.connect(dbinfo.db, check_same_thread=False)
         self._sqlcon.isolation_level = None
+        self._inbatch = False
         self.cv.acquire()
         self._sqlcon.execute(
             """CREATE TABLE IF NOT EXISTS %s (
@@ -209,14 +210,14 @@ class OrderedPersistentQueue:
         return r[0]
 
     def startbatchinsert(self):
-        self.cv.acquire()
         self._sqlbegin()
-        self.inbatch = True
+        self._inbatch = True
 
     def endbatchinsert(self):
-        self.inbatch = False
+        self._inbatch = False
         self._sqlend()
-        self.cv.release()
+        with Locker(self.cv):
+            self.cv.notifyAll()
 
     def put(self, ordering, item):
         """
@@ -224,9 +225,8 @@ class OrderedPersistentQueue:
         Return the uid of the inserted item.
         """
 
-        if self.inbatch:
+        if self._inbatch:
             uid = self._sqlput(ordering, item)
-            self.cv.notify()
             return uid
         with Locker(self.cv):
             uid = self._sqlput(ordering, item)
@@ -315,7 +315,7 @@ class ChronologicalPersistentQueue(OrderedPersistentQueue):
         Return the uid of the inserted item.
         """
 
-        if self.inbatch:
+        if self._inbatch:
             uid = self._sqlput(when, item)
             timedelta = when - now()
             if timedelta < self.__class__._NEGLIGIBLEWAIT:
