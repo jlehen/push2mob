@@ -111,7 +111,7 @@ class OrderedPersistentQueue:
     def __init__(self, dbinfo):
         self.cv = dbinfo.lock
         self._table = dbinfo.table
-        self._sqlcon = sqlite3.connect(dbinfo.db)
+        self._sqlcon = sqlite3.connect(dbinfo.db, check_same_thread=False)
         self._sqlcon.isolation_level = None
         self.cv.acquire()
         self._sqlcon.execute(
