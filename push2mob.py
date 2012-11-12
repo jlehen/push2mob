@@ -317,9 +317,6 @@ class ChronologicalPersistentQueue(OrderedPersistentQueue):
 
         if self._inbatch:
             uid = self._sqlput(when, item)
-            timedelta = when - now()
-            if timedelta < self.__class__._NEGLIGIBLEWAIT:
-                self.cv.notify()
             return uid
         with Locker(self.cv):
             uid = self._sqlput(when, item)
