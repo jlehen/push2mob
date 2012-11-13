@@ -43,6 +43,7 @@ import time
 import types
 import zmq
 
+CHECKPOINT_TIME = 10
 DUMP_QUERIES = False
 CONFIGFILE = 'push2mob.conf'
 
@@ -98,6 +99,22 @@ class AttributeHolder:
         for k in kwargs:
             self.__dict__[k] = kwargs[k]
 
+class PeriodicCallback(threading.Thread):
+
+    def __init__(self):
+        super(PeriodicCallback, self).__init__()
+        self.daemon = True
+        self.period = None
+
+    def configure(self, period, cb):
+        self.period = period
+        self.cb = cb
+
+    def run(self):
+        while True:
+            time.sleep(self.period)
+            self.cb()
+
 
 class OrderedPersistentQueue:
     """
@@ -114,19 +131,33 @@ class OrderedPersistentQueue:
         self._sqlcon = sqlite3.connect(dbinfo.db, check_same_thread=False)
         self._sqlcon.isolation_level = None
         self._inbatch = False
+        self._acklist = dbinfo.acklist
         self.cv.acquire()
-        self._sqlcon.execute(
-            """CREATE TABLE IF NOT EXISTS %s (
-            rowid INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-            inuse INTEGER NOT NULL DEFAULT 0,
-            ordering REAL NOT NULL,
-            data BLOB);""" % self._table)
-        self._sqlcon.execute(
-            """CREATE INDEX IF NOT EXISTS ordering ON %s (
-            inuse, ordering)""" % self._table)
-        self._sqlcon.execute(
-            """UPDATE %s SET inuse = 0""" % self._table)
+        if not dbinfo.initialized:
+            dbinfo.initialized = True
+            self._sqlcon.execute(
+                """CREATE TABLE IF NOT EXISTS %s (
+                rowid INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                inuse INTEGER NOT NULL DEFAULT 0,
+                ordering REAL NOT NULL,
+                data BLOB);""" % self._table)
+            self._sqlcon.execute(
+                """CREATE INDEX IF NOT EXISTS ordering ON %s (
+                inuse, ordering)""" % self._table)
+            self._sqlcon.execute(
+                """UPDATE %s SET inuse = 0 WHERE inuse <> 0""" % self._table)
+            # There is one checkpoint thread for table.  Given there may
+            # be multiple connection on it, let the first thread handle
+            # that stuff only.
+            dbinfo.checkpointthread.configure(dbinfo.checkpointperiod,
+              self._checkpoint_acks)
+            dbinfo.checkpointthread.start()
         self.cv.release()
+
+    def __del__(self):
+        pass
+        with Locker(self.cv):
+            self._checkpoint_acks()
 
     def _sqlbegin(self):
         self._sqlcon.execute("BEGIN")
@@ -209,14 +240,37 @@ class OrderedPersistentQueue:
         r = cur.fetchone()
         return r[0]
 
+    def _checkpoint_acks(self):
+        """
+        Record all accumulated acks since the last checkpoint in
+        the database.  This method is called by an asynchronous
+        thread so we have to lock the database (well, technically it
+        should be only this object) to prevent the thread whose this
+        object normally belongs to from messing with us.
+        """
+        with Locker(self.cv):
+            self._sqlbegin()
+            for t in self._acklist:
+                self._sqlack(t)
+            # This list is shared!  DO NOT REPLACE IT.
+            self._acklist[:] = []
+            self._sqlend()
+
     def startbatchinsert(self):
-        self._sqlbegin()
+        while True:
+            try:
+                self._sqlbegin()
+                break
+            except:
+                continue
         self._inbatch = True
 
     def endbatchinsert(self):
         self._inbatch = False
-        self._sqlend()
         with Locker(self.cv):
+            # Lock is not needed to end the transaction actually, but there
+            # is litte point to release it and then reacquire it right now.
+            self._sqlend()
             self.cv.notifyAll()
 
     def put(self, ordering, item):
@@ -275,7 +329,7 @@ class OrderedPersistentQueue:
         """
 
         with Locker(self.cv):
-            self._sqlack(t)
+            self._acklist.append(t)
 
     def reorder(self, t, ordering):
         """
@@ -367,7 +421,7 @@ class PersistentFIFO(OrderedPersistentQueue):
     def get(self, timeout=None):
         r = OrderedPersistentQueue.get(self, timeout)
         if r is not None:
-            self._sqlack(r)
+            self.ack(r)
         return r
 
 
@@ -1833,16 +1887,28 @@ if __name__ == "__main__":
         #
         apns_push_dbinfo = AttributeHolder(db=apns_sqlitedb,
             table=('%s_notifications' % apns_tableprefix),
-            lock=threading.Condition())
+            lock=threading.Condition(),
+            checkpointthread=PeriodicCallback(),
+            checkpointperiod=CHECKPOINT_TIME, acklist=[],
+            initialized=False)
         apns_feedback_dbinfo = AttributeHolder(db=apns_sqlitedb,
             table=('%s_feedback' % apns_tableprefix),
-            lock=threading.Condition())
+            lock=threading.Condition(),
+            checkpointthread=PeriodicCallback(),
+            checkpointperiod=CHECKPOINT_TIME, acklist=[],
+            initialized=False)
         gcm_push_dbinfo = AttributeHolder(db=gcm_sqlitedb,
             table=('%s_notifications' % gcm_tableprefix),
-            lock=threading.Condition())
+            lock=threading.Condition(),
+            checkpointthread=PeriodicCallback(),
+            checkpointperiod=CHECKPOINT_TIME, acklist=[],
+            initialized=False)
         gcm_feedback_dbinfo = AttributeHolder(db=gcm_sqlitedb,
             table='%s_feedback' % gcm_tableprefix,
-            lock=threading.Lock())
+            lock=threading.Lock(),
+            checkpointthread=PeriodicCallback(),
+            checkpointperiod=CHECKPOINT_TIME, acklist=[],
+            initialized=False)
 
         q = PersistentFIFO(apns_push_dbinfo)
         main_logger.info("%d APNS notifications retrieved from persistent " \
