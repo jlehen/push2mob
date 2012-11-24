@@ -269,7 +269,7 @@ Feedback containing a replaced device token:
 Configuration file is pretty well commented and should not pose you any
 problem.
 
-## IV.1. APNS Certificates
+## IV.1. APNS certificate
 
 As time of writing, APNS is signed by Entrust.  You can check this using:
 
@@ -277,7 +277,7 @@ As time of writing, APNS is signed by Entrust.  You can check this using:
 
 This command will show you the certificate used by APNS.  The output is
 quite verbose, but you will see a "Certificate chain" section at the
-beginning.  Right now it is:
+beginning.  At time of writing, the certificate chain is:
 
     Certificate chain
        0 s:/C=US/ST=California/L=Cupertino/O=Apple Inc./OU=iTMS Engineering/CN=gateway.sandbox.push.apple.com
@@ -293,7 +293,26 @@ In case you need it, just ask "Entrust root certificate" to Google and
 once you are on the page on Entrust's website, select "Root Certificates"
 and download "entrust\_2048\_ca.cer".  This is the same file as above.
 
+## IV.2. GCM certificate
 
+GCM is signed by Equifax (GeoTrust):
+
+    openssl s_client -connect android.googleapis.com:443
+
+At time of writing, the certificate chain is:
+
+    Certificate chain
+       0 s:/C=US/ST=California/L=Mountain View/O=Google Inc/CN=*.googleapis.com
+         i:/C=US/O=Google Inc/CN=Google Internet Authority
+       1 s:/C=US/O=Google Inc/CN=Google Internet Authority
+         i:/C=US/O=Equifax/OU=Equifax Secure Certificate Authority
+
+The last line is the root certificate you need to authenticate GCM'
+certificate.  On Debian, you can find it in
+    /etc/ssl/certs/Equifax_Secure_CA.pem
+
+In case yu need it:
+    http://www.geotrust.com/resources/root-certificates/index.html
 
 # V. IMPLEMENTATION BIG PICTURE
 
