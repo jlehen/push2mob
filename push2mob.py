@@ -103,6 +103,48 @@ class AttributeHolder:
         for k in kwargs:
             self.__dict__[k] = kwargs[k]
 
+# http://www.python.org/dev/peps/pep-0318/#examples
+def singleton(cls):
+    instances = {}
+    def getinstance():
+        if cls not in instances:
+            instances[cls] = cls()
+        return instances[cls]
+    return getinstance
+
+
+@singleton
+class Reminder(threading.Thread):
+
+    def __init__(self):
+        threading.Thread.__init__(self)
+        self.daemon = True
+        self.q = []
+        self.cv = threading.Condition()
+
+    def add(self, when, todo):
+        with Locker(self.cv):
+            heapq.heappush(self.q, (when, todo))
+            self.cv.notify()
+
+    def run(self):
+        while True:
+            with Locker(self.cv):
+                try:
+                    when, todo = heapq.heappop(self.q)
+                except IndexError:
+                    self.cv.wait()
+                    continue
+                timedelta = when - now()
+                if timedelta > 0:
+                    heapq.heappush(self.q, (when, todo))
+                    self.cv.wait(timedelta)
+                    continue
+                self.cv.release()
+                todo()
+                self.cv.acquire()
+
+
 class PeriodicCallback(threading.Thread):
 
     def __init__(self):
@@ -118,6 +160,7 @@ class PeriodicCallback(threading.Thread):
         while True:
             time.sleep(self.period)
             self.cb()
+
 
 class Exiting(Exception):
     pass
@@ -210,10 +253,13 @@ class CheckpointableQueue(Queue.Queue):
         return i
 
 
-class ChronologicalCheckpointableQueue(CheckpointableQueue):
+class CheckpointableTimelyQueue(CheckpointableQueue):
+
+    _PRECISION = 0.05
 
     def __init__(self, dbinfo):
         CheckpointableQueue.__init__(self, dbinfo)
+        self.reminder = Reminder()
 
     def _init(self, maxsize):
         self.queue = []
@@ -226,6 +272,18 @@ class ChronologicalCheckpointableQueue(CheckpointableQueue):
 
     def _get(self, heappop=heapq.heappop):
         return heappop(self.queue)
+
+    def get(self, block=True, timeout=None):
+        # XXX The implementation is not optimal but it is easy.
+        when, item = CheckpointableQueue.get(self, block, timeout)
+        if when - now() < self.__class__._PRECISION:
+            return (when, item)
+        # Temporarily let the item out and ask the reminder thread to
+        # push it back when needed.
+        def putback():
+            self.put((when, item))
+        self.reminder(when, putback)
+        raise Queue.Empty
 
 
 class DeviceTokenFormater:
@@ -1765,7 +1823,7 @@ if __name__ == "__main__":
         apns_feedbackq = CheckpointableQueue(apns_feedback_dbinfo)
         main_logger.info("%d APNS feedbacks retrieved from persistent " \
             "storage" % apns_feedbackq.qsize())
-        gcm_pushq = ChronologicalCheckpointableQueue(gcm_push_dbinfo)
+        gcm_pushq = CheckpointableTimelyQueue(gcm_push_dbinfo)
         main_logger.info("%d GCM notifications retrieved from persistent " \
             "storage" % gcm_pushq.qsize())
         db = GCMFeedbackDatabase(gcm_feedback_dbinfo)
