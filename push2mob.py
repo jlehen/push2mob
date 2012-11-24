@@ -1465,7 +1465,7 @@ class GCMExponentialBackoffDatabase:
 
 class GCMHTTPRequest:
 
-    def __init__(self, server_url, api_key):
+    def __init__(self, server_url, api_key, cacert):
         self.curl = pycurl.Curl()
         self.curl.setopt(pycurl.URL, server_url)
         self.curl.setopt(pycurl.HTTPHEADER,
@@ -1476,6 +1476,17 @@ class GCMHTTPRequest:
         self.curl.setopt(pycurl.FOLLOWLOCATION, 1)
         self.curl.setopt(pycurl.MAXREDIRS, 5)
         self.curl.setopt(pycurl.POST, 1)
+        cacert = cacert.strip()
+        if len(cacert) == 0:
+            self.curl.setopt(pycurl.SSL_VERIFYPEER, 0)
+        else:
+            verifyhost = 2      # 1 is not a valid value.
+            if cacert[0] == '~':
+                cacert = cacert[1:]
+                verifyhost = 0
+            self.curl.setopt(pycurl.CAINFO, cacert)
+            self.curl.setopt(pycurl.SSL_VERIFYPEER, 1)
+            self.curl.setopt(pycurl.SSL_VERIFYHOST, verifyhost)
 
     def send(self, jsonmsg):
         resp = HTTPResponseReceiver()
@@ -1503,7 +1514,7 @@ class GCMAgent(threading.Thread):
         'MissingCollapseKey'    : 'Missing Collapse Key'
     }
 
-    def __init__(self, idx, logger, pushq, server_url, api_key,
+    def __init__(self, idx, logger, pushq, server_url, api_key, ca_cert,
         min_interval, dry_run, expbackoffdb, feedback_dbinfo, exithelper):
 
         threading.Thread.__init__(self)
@@ -1511,7 +1522,7 @@ class GCMAgent(threading.Thread):
         self.daemon = True
         self.l = logger
         self.pushq = pushq
-        self.gcmreq = GCMHTTPRequest(server_url, api_key)
+        self.gcmreq = GCMHTTPRequest(server_url, api_key, ca_cert)
         self.mininterval = min_interval
         self.dryrun = dry_run
         self.expbackoffdb = expbackoffdb
@@ -1569,7 +1580,11 @@ class GCMAgent(threading.Thread):
                 self.l.debug("Notification #%d: %s", (uid, jsonmsg))
             jsonmsg = json.dumps(req, separators=(',',':'))
 
-            httpresp = self.gcmreq.send(jsonmsg)
+            try:
+                httpresp = self.gcmreq.send(jsonmsg)
+            except Exception as (e, estr):
+                self.l.error("Could not send request to GCM: %s" % estr)
+                continue
             status = httpresp.getStatus()
             jsonresp = ''.join(httpresp.getBody())
             resphdrs = httpresp.getHeaders()
@@ -1931,6 +1946,7 @@ if __name__ == "__main__":
         except Exception as e:
             raise Exception("gcm.log_level: %s" % e)
         gcm_logpropagate = cp.getboolean('gcm', 'log_propagate')
+        gcm_cacerts = cp.get('gcm', 'cacerts_file')
         gcm_api_key = cp.get('gcm', 'api_key')
         gcm_concurrency = cp.getint('gcm', 'concurrency')
         gcm_max_retries = cp.getint('gcm', 'max_retries')
@@ -2097,8 +2113,8 @@ if __name__ == "__main__":
 
         for i in range(gcm_concurrency):
             t = GCMAgent(i, gcm_logger, gcm_pushq, gcm_server_url,
-                gcm_api_key, gcm_min_interval, gcm_dry_run, gcm_expbackoffdb,
-                gcm_feedback_dbinfo, exithelper)
+                gcm_api_key, gcm_cacerts, gcm_min_interval, gcm_dry_run,
+                gcm_expbackoffdb, gcm_feedback_dbinfo, exithelper)
             threadlist.append(t)
             t.start()
 
