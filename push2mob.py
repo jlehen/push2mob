@@ -145,23 +145,6 @@ class Reminder(threading.Thread):
                 self.cv.acquire()
 
 
-class PeriodicCallback(threading.Thread):
-
-    def __init__(self):
-        super(PeriodicCallback, self).__init__()
-        self.daemon = True
-        self.period = None
-
-    def configure(self, period, cb):
-        self.period = period
-        self.cb = cb
-
-    def run(self):
-        while True:
-            time.sleep(self.period)
-            self.cb()
-
-
 class Exiting(Exception):
     pass
 
@@ -1804,18 +1787,14 @@ if __name__ == "__main__":
         # Create persistent queues for notifications and feedback.
         #
         apns_push_dbinfo = AttributeHolder(db=apns_sqlitedb,
-            table=('%s_notifications' % apns_tableprefix),
-            checkpointthread=PeriodicCallback())
+            table=('%s_notifications' % apns_tableprefix))
         apns_feedback_dbinfo = AttributeHolder(db=apns_sqlitedb,
-            table=('%s_feedback' % apns_tableprefix),
-            checkpointthread=PeriodicCallback())
+            table=('%s_feedback' % apns_tableprefix))
         gcm_push_dbinfo = AttributeHolder(db=gcm_sqlitedb,
-            table=('%s_notifications' % gcm_tableprefix),
-            checkpointthread=PeriodicCallback())
+            table=('%s_notifications' % gcm_tableprefix))
         gcm_feedback_dbinfo = AttributeHolder(db=gcm_sqlitedb,
             table='%s_feedback' % gcm_tableprefix,
-            lock=threading.Lock(),
-            checkpointthread=PeriodicCallback())
+            lock=threading.Lock())
 
         apns_pushq = CheckpointableQueue(apns_push_dbinfo)
         main_logger.info("%d APNS notifications retrieved from persistent " \
