@@ -148,11 +148,13 @@ class Reminder(threading.Thread):
 class Exiting(Exception):
     pass
 
+@singleton
 class ExitHelper:
     """
     This object is used to notify all threads that we are planning to exit.
     Threads used it to notify they are ready.
     """
+
     def __init__(self):
         self.val = 0
         self.exiting = False
@@ -450,13 +452,12 @@ class Listener(threading.Thread):
     _WHTSP = re.compile("\s+")
     _PLUS = re.compile(r"^\+")
 
-    def __init__(self, idx, logger, zmqsock, exithelper):
+    def __init__(self, idx, logger, zmqsock):
         threading.Thread.__init__(self)
         self.name = "GenericListener%d" % idx
         self.daemon = True
         self.l = logger
         self.zmqsock = zmqsock
-        self.exithelper = exithelper
 
     def _send_error(self, msg, detail = None):
         """
@@ -534,14 +535,15 @@ class Listener(threading.Thread):
         pass
 
     def run(self):
-        self.exithelper.register()
+        exithelper = ExitHelper()
+        exithelper.register()
         while True:
             # There is a small window where we can lose a request, but
             # we wouldn't have answered anything to the client so we
             # it is responsible to retry later.
             try:
                 while True:
-                    self.exithelper.checkexit()
+                    exithelper.checkexit()
                     if self.zmqsock.poll(1000):
                         break
             except Exiting:
@@ -655,7 +657,7 @@ class APNSAgent(threading.Thread):
     }
 
     def __init__(self, idx, logger, devtokfmt, pushq, gateway,
-        maxerrorwait, feedbackq, tlsconnect, exithelper):
+        maxerrorwait, feedbackq, tlsconnect):
 
         threading.Thread.__init__(self)
         self.name = "Agent%d" % idx
@@ -667,7 +669,6 @@ class APNSAgent(threading.Thread):
         self.maxerrorwait = maxerrorwait
         self.feedbackq = feedbackq
         self.tlsconnect = tlsconnect
-        self.exithelper = exithelper
         # Tuple: (id, bintok)
         self.recentnotifications = APNSRecentNotifications(maxerrorwait)
         self.sock = None
@@ -734,7 +735,8 @@ class APNSAgent(threading.Thread):
         return r
 
     def run(self):
-        self.exithelper.register()
+        exithelper = ExitHelper()
+        exithelper.register()
         while True:
             timeout = 1
 
@@ -749,7 +751,7 @@ class APNSAgent(threading.Thread):
 
                     countdown = timeout if timeout is not None else 0xFFFFFFFF
                     while countdown > 0 and apnsmsg is None:
-                        self.exithelper.checkexit()
+                        exithelper.checkexit()
                         try:
                             apnsmsg = self.pushq.get(True, 1)
                         except Queue.Empty:
@@ -828,7 +830,7 @@ class APNSFeedbackAgent(threading.Thread):
     """
 
     def __init__(self, idx, logger, devtokfmt, feedbackq, sock, gateway,
-        frequency, tlsconnect, exithelper):
+        frequency, tlsconnect):
         threading.Thread.__init__(self)
         self.name = "Feedback%d" % idx
         self.daemon = True
@@ -839,7 +841,6 @@ class APNSFeedbackAgent(threading.Thread):
         self.gateway = gateway
         self.frequency = frequency
         self.tlsconnect = tlsconnect
-        self.exithelper = exithelper
         self.fmt = '> IH ' + str(APNS_DEVTOKLEN) + 's'
         self.tuplesize = struct.calcsize(self.fmt)
 
@@ -849,7 +850,8 @@ class APNSFeedbackAgent(threading.Thread):
         self.sock = None
 
     def run(self):
-        self.exithelper.register()
+        exithelper = ExitHelper()
+        exithelper.register()
         while True:
             try:
                 # self.sock is not None on the first run because we
@@ -858,7 +860,7 @@ class APNSFeedbackAgent(threading.Thread):
                 if self.sock is None:
                     countdown = self.frequency
                     while countdown > 0:
-                        self.exithelper.checkexit() 
+                        exithelper.checkexit() 
                         time.sleep(1)
                         countdown -= 1
 
@@ -870,7 +872,7 @@ class APNSFeedbackAgent(threading.Thread):
                     # 10 seconds should be enough for APNS to send something!
                     b = None
                     for i in range(10):
-                        self.exithelper.checkexit() 
+                        exithelper.checkexit() 
                         triple = select.select([self.sock], [], [], 1)
                         if len(triple[0]) == 0:
                             continue
@@ -917,8 +919,8 @@ class APNSListener(Listener):
 
     _PAYLOADMAXLEN = 256
 
-    def __init__(self, idx, logger, zmqsock, exithelper, pushq, feedbackq):
-        Listener.__init__(self, idx, logger, zmqsock, exithelper)
+    def __init__(self, idx, logger, zmqsock, pushq, feedbackq):
+        Listener.__init__(self, idx, logger, zmqsock)
         self.name = "Listener%d" % idx
         self.l = logger
         self.pushq = pushq
@@ -1247,7 +1249,7 @@ class GCMAgent(threading.Thread):
     }
 
     def __init__(self, idx, logger, pushq, server_url, api_key, ca_cert,
-        min_interval, dry_run, expbackoffdb, feedback_dbinfo, exithelper):
+        min_interval, dry_run, expbackoffdb, feedback_dbinfo):
 
         threading.Thread.__init__(self)
         self.name = "Agent%d" % idx
@@ -1259,14 +1261,14 @@ class GCMAgent(threading.Thread):
         self.dryrun = dry_run
         self.expbackoffdb = expbackoffdb
         self.feedback_dbinfo = feedback_dbinfo
-        self.exithelper = exithelper
 
     def run(self):
         self.feedbackdb = GCMFeedbackDatabase(self.feedback_dbinfo)
 
         needsleep = 0
         gcmmsg = None
-        self.exithelper.register()
+        exithelper = ExitHelper()
+        exithelper.register()
         while True:
             if needsleep:
                 time.sleep(self.mininterval)
@@ -1275,7 +1277,7 @@ class GCMAgent(threading.Thread):
             gcmmsg = None
             try:
                 while gcmmsg is None:
-                    self.exithelper.checkexit()
+                    exithelper.checkexit()
                     try:
                         gcmmsg = self.pushq.get(True, 1)
                     except Queue.Empty:
@@ -1459,9 +1461,9 @@ class GCMListener(Listener):
     _MAXTTL = 2419200       # 4 weeks
     _PAYLOADMAXLEN = 4096
 
-    def __init__(self, idx, logger, zmqsock, exithelper, pushq,
+    def __init__(self, idx, logger, zmqsock, pushq,
       feedback_dbinfo):
-        Listener.__init__(self, idx, logger, zmqsock, exithelper)
+        Listener.__init__(self, idx, logger, zmqsock)
         self.name = "Listener%d" % idx
         self.l = logger
         self.pushq = pushq
@@ -1829,31 +1831,31 @@ if __name__ == "__main__":
         for i in range(apns_push_concurrency):
             t = APNSAgent(i, apns_logger, apns_devtokfmt, apns_pushq,
                 apns_push_gateway, apns_push_max_error_wait,
-                apns_feedbackq, apns_tlsconnect, exithelper)
+                apns_feedbackq, apns_tlsconnect)
             threadlist.append(t)
             t.start()
 
         t = APNSFeedbackAgent(0, apns_logger, apns_devtokfmt,
             apns_feedbackq, apns_feedback_sock, apns_feedback_gateway,
-            apns_feedback_freq, apns_tlsconnect, exithelper)
+            apns_feedback_freq, apns_tlsconnect)
         threadlist.append(t)
         t.start()
 
         for i in range(gcm_concurrency):
             t = GCMAgent(i, gcm_logger, gcm_pushq, gcm_server_url,
                 gcm_api_key, gcm_cacerts, gcm_min_interval, gcm_dry_run,
-                gcm_expbackoffdb, gcm_feedback_dbinfo, exithelper)
+                gcm_expbackoffdb, gcm_feedback_dbinfo)
             threadlist.append(t)
             t.start()
 
         #
         # Start APNSListener and GCMListener threads.
         #
-        t = APNSListener(0, apns_logger, apns_zmqsock, exithelper, apns_pushq,
+        t = APNSListener(0, apns_logger, apns_zmqsock, apns_pushq,
             apns_feedbackq)
         threadlist.append(t)
         t.start()
-        t = GCMListener(0, gcm_logger, gcm_zmqsock, exithelper, gcm_pushq,
+        t = GCMListener(0, gcm_logger, gcm_zmqsock, gcm_pushq,
             gcm_feedback_dbinfo)
         threadlist.append(t)
         t.start()
