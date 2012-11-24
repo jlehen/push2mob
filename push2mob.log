@@ -1,0 +1,7 @@
+2012/10/17 15:42:32 MainThread: hello main
+2012/10/17 15:44:26 MainThread: hello apns
+2012/10/17 15:44:26 MainThread: hello main
+2012/10/17 15:47:13 MAIN/MainThread: hello apns
+2012/10/17 15:47:13 MAIN/MainThread: hello main
+2012/10/17 15:48:48 PUSH2MOB.APNS/MainThread: hello apns
+2012/10/17 15:48:48 PUSH2MOB/MainThread: hello main

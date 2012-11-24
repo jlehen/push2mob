@@ -1897,6 +1897,7 @@ if __name__ == "__main__":
 
     try:
         daemon = cp.getboolean('main', 'daemon')
+        logstdout = cp.getboolean('main', 'log_stdout')
         logfile = cp.get('main', 'log_file')
         try:
             loglevel = parse_loglevel(cp.get('main', 'log_level'))
@@ -1942,6 +1943,9 @@ if __name__ == "__main__":
     if daemon and len(logfile) == 0:
         logging.error("Option main.log_file cannot be empty in daemon mode")
         sys.exit(1)
+    if daemon and logstdout:
+        logging.error("Option main.log_stdout cannot be set in daemon mode")
+        sys.exit(1)
 
     if apns_devtok_format != 'base64' and apns_devtok_format != 'hex':
         main_logger.error("%s: Unknown device token format: %s" %
@@ -1956,7 +1960,7 @@ if __name__ == "__main__":
         '%(message)s', '%Y/%m/%d %H:%M:%S')
     main_logger = createLogger('push2mob', logfile, loglevel, False, formatter)
     main_logger.propagate = False
-    if not daemon:
+    if logstdout:
         handler = logging.StreamHandler()
         handler.setFormatter(formatter)
         main_logger.addHandler(handler)
