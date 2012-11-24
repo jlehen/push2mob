@@ -22,9 +22,12 @@
 # SOFTWARE.
 
 import ConfigParser
+import Queue
 import base64
+import collections
 import datetime
 import getopt
+import heapq
 import json
 import logging
 import math
@@ -35,6 +38,7 @@ import re
 import socket
 import sqlite3
 import select
+import signal
 import ssl
 import struct
 import sys
@@ -114,6 +118,114 @@ class PeriodicCallback(threading.Thread):
         while True:
             time.sleep(self.period)
             self.cb()
+
+class Exiting(Exception):
+    pass
+
+class ExitHelper:
+    """
+    This object is used to notify all threads that we are planning to exit.
+    Threads used it to notify they are ready.
+    """
+    def __init__(self):
+        self.val = 0
+        self.exiting = False
+        self.cond = threading.Condition()
+
+    def register(self):
+        if self.exiting:
+            return False
+        with Locker(self.cond):
+            if self.exiting:
+                return False
+            self.val += 1
+        return True
+
+    def checkexit(self):
+        if not self.exiting:
+            return
+        with Locker(self.cond):
+            self.val -= 1
+            if self.val == 0:
+                self.cond.notifyAll()
+        raise Exiting()
+
+    def signalexit(self):
+        self.exiting = True
+
+    def waitexit(self):
+        with Locker(self.cond):
+            while self.val != 0:
+                self.cond.wait(1)
+
+
+class CheckpointableQueue(Queue.Queue):
+
+    def __init__(self, dbinfo):
+        Queue.Queue.__init__(self)
+        self.dbinfo = dbinfo
+        self._init2()
+
+    def _init2(self):
+        conn = sqlite3.connect(self.dbinfo.db)
+        conn.isolation_level = None
+        try:
+            c = conn.execute(
+              "SELECT data FROM %s ORDER BY rowid" % self.dbinfo.table)
+        except:
+            return
+        for e in c:
+            self.queue.append(eval(e[0]))
+
+    def __rename_table(self, conn):
+        c = conn.execute(
+          """SELECT name FROM sqlite_master WHERE type='table'
+          AND name='%s';""" % self.dbinfo.table)
+        if c.fetchone() != None:
+            try:
+                conn.execute("DROP TABLE old_%s" % self.dbinfo.table)
+            except:
+                pass
+            conn.execute("ALTER TABLE %s RENAME to old_%s" % \
+              (self.dbinfo.table, self.dbinfo.table))
+
+    def checkpoint(self):
+        i = 0
+        with Locker(self.mutex):
+            conn = sqlite3.connect(self.dbinfo.db)
+            conn.isolation_level = None
+            self.__rename_table(conn)
+            c = conn.cursor()
+            c.execute(
+                """CREATE TABLE %s (
+                rowid INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                data BLOB);""" % self.dbinfo.table)
+            c.execute("BEGIN")
+            for e in self.queue:
+                i += 1
+                c.execute("INSERT INTO %s (data) VALUES(?)""" % \
+                  self.dbinfo.table, (str(e), ))
+            c.execute("END")
+            conn.close()
+        return i
+
+
+class ChronologicalCheckpointableQueue(CheckpointableQueue):
+
+    def __init__(self, dbinfo):
+        CheckpointableQueue.__init__(self, dbinfo)
+
+    def _init(self, maxsize):
+        self.queue = []
+
+    def _qsize(self, len=len):
+        return len(self.queue)
+
+    def _put(self, item, heappush=heapq.heappush):
+        heappush(self.queue, item)
+
+    def _get(self, heappop=heapq.heappop):
+        return heappop(self.queue)
 
 
 class OrderedPersistentQueue:
@@ -606,12 +718,13 @@ class Listener(threading.Thread):
     _WHTSP = re.compile("\s+")
     _PLUS = re.compile(r"^\+")
 
-    def __init__(self, idx, logger, zmqsock):
+    def __init__(self, idx, logger, zmqsock, exithelper):
         threading.Thread.__init__(self)
         self.name = "GenericListener%d" % idx
         self.daemon = True
         self.l = logger
         self.zmqsock = zmqsock
+        self.exithelper = exithelper
 
     def _send_error(self, msg, detail = None):
         """
@@ -689,7 +802,20 @@ class Listener(threading.Thread):
         pass
 
     def run(self):
+        self.exithelper.register()
         while True:
+            # There is a small window where we can lose a request, but
+            # we wouldn't have answered anything to the client so we
+            # it is responsible to retry later.
+            try:
+                while True:
+                    self.exithelper.checkexit()
+                    if self.zmqsock.poll(1000):
+                        break
+            except Exiting:
+                self.l.debug("Exiting...")
+                break
+
             msg = self.zmqsock.recv()
             #
             # Parse line.
@@ -796,19 +922,20 @@ class APNSAgent(threading.Thread):
         255: "None (unknown)"
     }
 
-    def __init__(self, idx, logger, devtokfmt, push_dbinfo, gateway,
-        maxerrorwait, feedback_dbinfo, tlsconnect):
+    def __init__(self, idx, logger, devtokfmt, pushq, gateway,
+        maxerrorwait, feedbackq, tlsconnect, exithelper):
 
         threading.Thread.__init__(self)
         self.name = "Agent%d" % idx
         self.daemon = True
         self.l = logger
         self.devtokfmt = devtokfmt
-        self.push_dbinfo = push_dbinfo
+        self.pushq = pushq
         self.gateway = gateway
         self.maxerrorwait = maxerrorwait
-        self.feedback_dbinfo = feedback_dbinfo
+        self.feedbackq = feedbackq
         self.tlsconnect = tlsconnect
+        self.exithelper = exithelper
         # Tuple: (id, bintok)
         self.recentnotifications = APNSRecentNotifications(maxerrorwait)
         self.sock = None
@@ -875,35 +1002,46 @@ class APNSAgent(threading.Thread):
         return r
 
     def run(self):
-        self.pushq = PersistentFIFO(self.push_dbinfo)
-        self.feedbackq = PersistentFIFO(self.feedback_dbinfo)
-
+        self.exithelper.register()
         while True:
             timeout = 1
 
             # The sole purpose of this inner loop is too be able to
-            # progressively increment the timeout.
-            while True:
-                if self.sock is None:
-                    timeout = None
-                apnsmsg = self.pushq.get(timeout)
-                if apnsmsg is not None:
-                    break
-
-                triple = select.select([self.sock], [], [], 0)
-                if len(triple[0]) != 0:
-                    self._processerror()
-                    timeout = None
-                else:
-                    # Try to be generous with APNS and give it enough
-                    # time to return is error.
-                    timeout = timeout * 2 - timeout / 2 - timeout / 4
-                    if timeout >= 20:
+            # progressively increment the timeout, because as times goes on,
+            # APNS will less likely send us an in-line error.
+            apnsmsg = None
+            try:
+                while True:
+                    if self.sock is None:
                         timeout = None
-                continue
 
-            uid = apnsmsg.uid
-            creation, expiry, devtok, payload = apnsmsg.data
+                    countdown = timeout if timeout is not None else 0xFFFFFFFF
+                    while countdown > 0 and apnsmsg is None:
+                        self.exithelper.checkexit()
+                        try:
+                            apnsmsg = self.pushq.get(True, 1)
+                        except Queue.Empty:
+                            countdown -= 1
+
+                    if apnsmsg is not None:
+                        break
+
+                    triple = select.select([self.sock], [], [], 0)
+                    if len(triple[0]) != 0:
+                        self._processerror()
+                        timeout = None
+                    else:
+                        # Try to be generous with APNS and give it enough
+                        # time to return is error.
+                        timeout = timeout * 2 - timeout / 2 - timeout / 4
+                        if timeout >= 20:
+                            timeout = None
+                    continue
+            except Exiting:
+                self.l.debug("Exiting...")
+                break
+
+            uid, creation, expiry, devtok, payload = apnsmsg
             bintok = base64.standard_b64decode(devtok)
 
             # Build the binary message.
@@ -957,18 +1095,19 @@ class APNSFeedbackAgent(threading.Thread):
     creates feedback entries for it.
     """
 
-    def __init__(self, idx, logger, devtokfmt, feedback_dbinfo, sock, gateway,
-        frequency, tlsconnect):
+    def __init__(self, idx, logger, devtokfmt, feedbackq, sock, gateway,
+        frequency, tlsconnect, exithelper):
         threading.Thread.__init__(self)
         self.name = "Feedback%d" % idx
         self.daemon = True
         self.sock = sock
         self.l = logger
         self.devtokfmt = devtokfmt
-        self.feedback_dbinfo = feedback_dbinfo
+        self.feedbackq = feedbackq
         self.gateway = gateway
         self.frequency = frequency
         self.tlsconnect = tlsconnect
+        self.exithelper = exithelper
         self.fmt = '> IH ' + str(APNS_DEVTOKLEN) + 's'
         self.tuplesize = struct.calcsize(self.fmt)
 
@@ -978,47 +1117,62 @@ class APNSFeedbackAgent(threading.Thread):
         self.sock = None
 
     def run(self):
-        self.feedbackq = PersistentFIFO(self.feedback_dbinfo)
-
+        self.exithelper.register()
         while True:
-            # self.sock is not None on the first run because we
-            # inherits the socket from the main thread (which has
-            # been used for testing purpose).
-            if self.sock is None:
-                time.sleep(self.frequency)
-                self.sock = self.tlsconnect(self.gateway, self.frequency,
-                    "Couldn't connect to feedback service (%s:%d): %s")
+            try:
+                # self.sock is not None on the first run because we
+                # inherits the socket from the main thread (which has
+                # been used for testing purpose).
+                if self.sock is None:
+                    countdown = self.frequency
+                    while countdown > 0:
+                        self.exithelper.checkexit() 
+                        time.sleep(1)
+                        countdown -= 1
 
-            buf = ""
-            while True:
-                b = self.sock.recv()
-                if len(b) == 0:
-                    if len(buf) != 0:
-                        self.l.warning("Unexpected trailing garbage " \
-                            "from feedback service (%d bytes remaining)" %
-                            len(buf))
-                        hexdump(buf)
-                    break
+                    self.sock = self.tlsconnect(self.gateway, self.frequency,
+                        "Couldn't connect to feedback service (%s:%d): %s")
 
-                buf = buf + b
-                self.feedbackq.startbatchinsert()
+                buf = ""
                 while True:
-                    try:
-                        bintuple = buf[0:self.tuplesize]
-                    except IndexError as e:
+                    # 10 seconds should be enough for APNS to send something!
+                    b = None
+                    for i in range(10):
+                        self.exithelper.checkexit() 
+                        triple = select.select([self.sock], [], [], 1)
+                        if len(triple[0]) == 0:
+                            continue
+                        b = self.sock.recv()
+                        if len(b) == 0:
+                            if len(buf) != 0:
+                                self.l.warning("Unexpected trailing garbage " \
+                                    "from feedback service (%d bytes remaining)" %
+                                    len(buf))
+                                hexdump(buf)
+                            break
+                    if b is None or len(b) == 0:
                         break
-                    if len(bintuple) < self.tuplesize:
-                        break
-                    buf = buf[self.tuplesize:]
-                    ts, toklen, bintok = struct.unpack(self.fmt, bintuple)
-                    devtok = self.devtokfmt(bintok)
-                    ts = str(ts)
-                    self.l.info("New feedback tuple (%s, %s)" %
-                        (ts, devtok))
-                    self.feedbackq.put((ts, devtok))
-                self.feedbackq.endbatchinsert()
 
-            self._close()
+                    buf = buf + b
+                    while True:
+                        try:
+                            bintuple = buf[0:self.tuplesize]
+                        except IndexError as e:
+                            break
+                        if len(bintuple) < self.tuplesize:
+                            break
+                        buf = buf[self.tuplesize:]
+                        ts, toklen, bintok = struct.unpack(self.fmt, bintuple)
+                        devtok = self.devtokfmt(bintok)
+                        ts = str(ts)
+                        self.l.info("New feedback tuple (%s, %s)" %
+                            (ts, devtok))
+                        self.feedbackq.put((ts, devtok))
+
+                self._close()
+            except Exiting:
+                self.l.debug("Exiting...")
+                break
 
 
 class APNSListener(Listener):
@@ -1031,12 +1185,13 @@ class APNSListener(Listener):
 
     _PAYLOADMAXLEN = 256
 
-    def __init__(self, idx, logger, zmqsock, push_dbinfo, feedback_dbinfo):
-        Listener.__init__(self, idx, logger, zmqsock)
+    def __init__(self, idx, logger, zmqsock, exithelper, pushq, feedbackq):
+        Listener.__init__(self, idx, logger, zmqsock, exithelper)
         self.name = "Listener%d" % idx
         self.l = logger
-        self.push_dbinfo = push_dbinfo
-        self.feedback_dbinfo = feedback_dbinfo
+        self.pushq = pushq
+        self.feedbackq = feedbackq
+        self.uid = random.randint(0, 2**32)
 
     def _parse_send(self, msg):
         arglist, devtoks, payload = Listener._parse_send_args(self, 1, msg)
@@ -1093,29 +1248,25 @@ class APNSListener(Listener):
         expiry = arglist[0]
 
         idlist = []
-        self.pushq.startbatchinsert()
         for devtok in devtoks:
-            uid = self.pushq.put((now(), expiry, devtok, payload))
+            uid = self.uid
+            self.uid += 1
+            self.pushq.put((uid, now(), expiry, devtok, payload))
             idlist.append(str(uid))
             self.l.debug("Got notification #%d for device token %s, " \
                 "expiring at %d" % (uid, base64.standard_b64encode(devtok), expiry))
-        self.pushq.endbatchinsert()
         return ' '.join(idlist)
 
     def _perform_feedback(self):
         feedbacks = []
         while True:
-            qobj = self.feedbackq.get(0)
-            if qobj is None:
+            try:
+                qobj = self.feedbackq.get_nowait()
+            except Queue.Empty:
                 break
             timestamp, devtok = qobj.data
             feedbacks.append("%s:%s" % (timestamp, devtok))
         return ' '.join(feedbacks)
-
-    def run(self):
-        self.pushq = PersistentFIFO(self.push_dbinfo)
-        self.feedbackq = PersistentFIFO(self.feedback_dbinfo)
-        Listener.run(self)
 
 
 #############################################################################
@@ -1352,41 +1503,46 @@ class GCMAgent(threading.Thread):
         'MissingCollapseKey'    : 'Missing Collapse Key'
     }
 
-    def __init__(self, idx, logger, push_dbinfo, server_url, api_key,
-        min_interval, dry_run, expbackoffdb, feedback_dbinfo):
+    def __init__(self, idx, logger, pushq, server_url, api_key,
+        min_interval, dry_run, expbackoffdb, feedback_dbinfo, exithelper):
 
         threading.Thread.__init__(self)
         self.name = "Agent%d" % idx
         self.daemon = True
         self.l = logger
-        self.push_dbinfo = push_dbinfo
+        self.pushq = pushq
         self.gcmreq = GCMHTTPRequest(server_url, api_key)
         self.mininterval = min_interval
         self.dryrun = dry_run
         self.expbackoffdb = expbackoffdb
         self.feedback_dbinfo = feedback_dbinfo
+        self.exithelper = exithelper
 
     def run(self):
-        self.pushq = ChronologicalPersistentQueue(self.push_dbinfo)
         self.feedbackdb = GCMFeedbackDatabase(self.feedback_dbinfo)
 
         needsleep = 0
         gcmmsg = None
+        self.exithelper.register()
         while True:
-            # Take care of setting gcmmsg to None if you've
-            # already ack'ed the gcmmsg or something in the loop.
-            if gcmmsg is not None:
-                self.pushq.ack(gcmmsg)
-
             if needsleep:
                 time.sleep(self.mininterval)
             needsleep = 1
 
-            gcmmsg = self.pushq.get()
-            uid = gcmmsg.uid
-            ordering = gcmmsg.ordering
-            creation, collapsekey, expiry, delayidle, devtoks, payload = \
-                gcmmsg.data
+            gcmmsg = None
+            try:
+                while gcmmsg is None:
+                    self.exithelper.checkexit()
+                    try:
+                        gcmmsg = self.pushq.get(True, 1)
+                    except Queue.Empty:
+                        pass
+            except Exiting:
+                self.l.debug("Exiting...")
+                break
+
+            uid, creation, collapsekey, expiry, delayidle, devtoks, payload = \
+                gcmmsg[1]
 
             # We store an absolute value but GCM wants a relative TTL.
             # Semantically this makes sense to adjust the TTL just
@@ -1442,11 +1598,8 @@ class GCMAgent(threading.Thread):
                 continue
             elif status == 500 or status == 503:
                 delay = self.expbackoffdb.schedule(uid, retryafter)
-                if delay is None:
-                    # Just drop it.
-                    self.pushq.ack(gcmmsg)
-                else:
-                    self.pushq.reorder(gcmmsg, ordering + delay)
+                if delay is not None:
+                    self.pushq.put((now() + delay, gcmmsg))
                 # These errors happen from time to time, they are not
                 # strictly errors, so just issue warnings.
                 if status == 500:
@@ -1537,19 +1690,14 @@ class GCMAgent(threading.Thread):
                 continue
             delay = self.expbackoffdb.schedule(uid, retryafter)
             if delay is None:
-                self.pushq.ack(gcmmsg)
                 continue
 
             if len(devtoks2retry) == len(devtoks):
-                self.pushq.reorder(gcmmsg, ordering + delay)
+                self.pushq.put((now() + delay, gcmmsg))
                 continue
 
-            # Given we cannot change the data in the persistent queue and
-            # we must change the list of registration IDs, we have to ack
-            # the current one and create another one from scratch.
-            self.pushq.ack(gcmmsg)
-            self.pushq.put(now() + delay, (creation, collapsekey, expiry,
-                delayidle, devtoks2retry, payload))
+            self.pushq.put((now() + delay, (uid, creation, collapsekey, expiry,
+                delayidle, devtoks2retry, payload)))
 
 
 class GCMListener(Listener):
@@ -1564,12 +1712,14 @@ class GCMListener(Listener):
     _MAXTTL = 2419200       # 4 weeks
     _PAYLOADMAXLEN = 4096
 
-    def __init__(self, idx, logger, zmqsock, push_dbinfo, feedback_dbinfo):
-        Listener.__init__(self, idx, logger, zmqsock)
+    def __init__(self, idx, logger, zmqsock, exithelper, pushq,
+      feedback_dbinfo):
+        Listener.__init__(self, idx, logger, zmqsock, exithelper)
         self.name = "Listener%d" % idx
         self.l = logger
-        self.push_dbinfo = push_dbinfo
+        self.pushq = pushq
         self.feedback_dbinfo = feedback_dbinfo
+        self.uid = random.randint(0, 2**32)
 
     def _parse_send(self, msg):
         arglist, ids, payload = Listener._parse_send_args(self, 3, msg)
@@ -1645,16 +1795,16 @@ class GCMListener(Listener):
 
         createtime = now()
         uids = []
-        self.pushq.startbatchinsert()
         while len(devtoks) > 0:
             toks = devtoks[:GCMListener._MAXNUMIDS]
             devtoks = devtoks[GCMListener._MAXNUMIDS:]
-            uid = self.pushq.put(createtime, (createtime, collapsekey, expiry,
-                delayidle, toks, payload))
+            uid = self.uid
+            self.uid += 1
+            self.pushq.put((createtime, (uid, createtime, collapsekey,
+                expiry, delayidle, toks, payload)))
             self.l.debug("Got notification #%d for %d devices, " \
                 "expiring at %d" % (uid, len(toks), expiry))
             uids.append(str(uid))
-        self.pushq.endbatchinsert()
         return ' '.join(uids)
 
     def _perform_feedback(self):
@@ -1673,7 +1823,6 @@ class GCMListener(Listener):
         return ' '.join(feedbacks)
 
     def run(self):
-        self.pushq = ChronologicalPersistentQueue(self.push_dbinfo)
         self.idschanges = GCMFeedbackDatabase(self.feedback_dbinfo)
         Listener.run(self)
 
@@ -1887,41 +2036,27 @@ if __name__ == "__main__":
         #
         apns_push_dbinfo = AttributeHolder(db=apns_sqlitedb,
             table=('%s_notifications' % apns_tableprefix),
-            lock=threading.Condition(),
-            checkpointthread=PeriodicCallback(),
-            checkpointperiod=CHECKPOINT_TIME, acklist=[],
-            initialized=False)
+            checkpointthread=PeriodicCallback())
         apns_feedback_dbinfo = AttributeHolder(db=apns_sqlitedb,
             table=('%s_feedback' % apns_tableprefix),
-            lock=threading.Condition(),
-            checkpointthread=PeriodicCallback(),
-            checkpointperiod=CHECKPOINT_TIME, acklist=[],
-            initialized=False)
+            checkpointthread=PeriodicCallback())
         gcm_push_dbinfo = AttributeHolder(db=gcm_sqlitedb,
             table=('%s_notifications' % gcm_tableprefix),
-            lock=threading.Condition(),
-            checkpointthread=PeriodicCallback(),
-            checkpointperiod=CHECKPOINT_TIME, acklist=[],
-            initialized=False)
+            checkpointthread=PeriodicCallback())
         gcm_feedback_dbinfo = AttributeHolder(db=gcm_sqlitedb,
             table='%s_feedback' % gcm_tableprefix,
             lock=threading.Lock(),
-            checkpointthread=PeriodicCallback(),
-            checkpointperiod=CHECKPOINT_TIME, acklist=[],
-            initialized=False)
+            checkpointthread=PeriodicCallback())
 
-        q = PersistentFIFO(apns_push_dbinfo)
+        apns_pushq = CheckpointableQueue(apns_push_dbinfo)
         main_logger.info("%d APNS notifications retrieved from persistent " \
-            "storage" % q.qsize())
-        del q
-        q = PersistentFIFO(apns_feedback_dbinfo)
+            "storage" % apns_pushq.qsize())
+        apns_feedbackq = CheckpointableQueue(apns_feedback_dbinfo)
         main_logger.info("%d APNS feedbacks retrieved from persistent " \
-            "storage" % q.qsize())
-        del q
-        q = ChronologicalPersistentQueue(gcm_push_dbinfo)
+            "storage" % apns_feedbackq.qsize())
+        gcm_pushq = ChronologicalCheckpointableQueue(gcm_push_dbinfo)
         main_logger.info("%d GCM notifications retrieved from persistent " \
-            "storage" % q.qsize())
-        del q
+            "storage" % gcm_pushq.qsize())
         db = GCMFeedbackDatabase(gcm_feedback_dbinfo)
         main_logger.info("%d GCM feedbacks retrieved from persistent " \
             "storage" % db.count())
@@ -1930,35 +2065,60 @@ if __name__ == "__main__":
         gcm_expbackoffdb = GCMExponentialBackoffDatabase(gcm_max_retries)
 
         #
+        # Prepare the exit door.
+        #
+        exithelper = ExitHelper()
+        def exit_handler(signum, frame):
+            main_logger.info("Exit requested, waiting threads acknowledgement...")
+            exithelper.signalexit()
+        signal.signal(signal.SIGTERM, exit_handler)
+        signal.signal(signal.SIGINT, exit_handler)
+
+        #
         # Start APNS ang GCM agent threads and APNS feedback one.
         #
+        threadlist = []
         for i in range(apns_push_concurrency):
-            t = APNSAgent(i, apns_logger, apns_devtokfmt, apns_push_dbinfo,
+            t = APNSAgent(i, apns_logger, apns_devtokfmt, apns_pushq,
                 apns_push_gateway, apns_push_max_error_wait,
-                apns_feedback_dbinfo, apns_tlsconnect)
+                apns_feedbackq, apns_tlsconnect, exithelper)
+            threadlist.append(t)
             t.start()
 
         t = APNSFeedbackAgent(0, apns_logger, apns_devtokfmt,
-            apns_feedback_dbinfo, apns_feedback_sock, apns_feedback_gateway,
-            apns_feedback_freq, apns_tlsconnect)
+            apns_feedbackq, apns_feedback_sock, apns_feedback_gateway,
+            apns_feedback_freq, apns_tlsconnect, exithelper)
+        threadlist.append(t)
         t.start()
 
         for i in range(gcm_concurrency):
-            t = GCMAgent(i, gcm_logger, gcm_push_dbinfo, gcm_server_url,
+            t = GCMAgent(i, gcm_logger, gcm_pushq, gcm_server_url,
                 gcm_api_key, gcm_min_interval, gcm_dry_run, gcm_expbackoffdb,
-                gcm_feedback_dbinfo)
+                gcm_feedback_dbinfo, exithelper)
+            threadlist.append(t)
             t.start()
 
         #
         # Start APNSListener and GCMListener threads.
         #
-        t = APNSListener(0, apns_logger, apns_zmqsock, apns_push_dbinfo,
-            apns_feedback_dbinfo)
+        t = APNSListener(0, apns_logger, apns_zmqsock, exithelper, apns_pushq,
+            apns_feedbackq)
+        threadlist.append(t)
         t.start()
-        t = GCMListener(0, gcm_logger, gcm_zmqsock, gcm_push_dbinfo,
+        t = GCMListener(0, gcm_logger, gcm_zmqsock, exithelper, gcm_pushq,
             gcm_feedback_dbinfo)
-        # XXX Fix this.
-        t.run()
+        threadlist.append(t)
+        t.start()
+
+        exithelper.waitexit()
+        apns_pushq_size = apns_pushq.checkpoint()
+        apns_feedbackq_size = apns_feedbackq.checkpoint()
+        gcm_pushq_size = gcm_pushq.checkpoint()
+        main_logger.info("Checkpointed %u APNS notifications, " \
+          "%u APNS feedback tuples, %u GCM notifications" %
+          (apns_pushq_size, apns_feedbackq_size, gcm_pushq_size))
+        # Never reached.
+        sys.exit(0)
 
     except SystemExit:
         # This exception is raised by sys.exit().
