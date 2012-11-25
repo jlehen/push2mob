@@ -11,8 +11,11 @@ context = zmq.Context()
 sock = context.socket(zmq.REQ)
 sock.connect(sys.argv[1])
 
-while True:
-	_ = raw_input()
-	sock.send(_)
-	_ = sock.recv()
-	print _
+try:
+    while True:
+	    _ = raw_input()
+	    sock.send(_)
+	    _ = sock.recv()
+	    print _
+except EOFError:
+    pass
