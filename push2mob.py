@@ -113,38 +113,6 @@ def singleton(cls):
     return getinstance
 
 
-@singleton
-class Reminder(threading.Thread):
-
-    def __init__(self):
-        threading.Thread.__init__(self)
-        self.daemon = True
-        self.q = []
-        self.cv = threading.Condition()
-
-    def add(self, when, todo):
-        with Locker(self.cv):
-            heapq.heappush(self.q, (when, todo))
-            self.cv.notify()
-
-    def run(self):
-        while True:
-            with Locker(self.cv):
-                try:
-                    when, todo = heapq.heappop(self.q)
-                except IndexError:
-                    self.cv.wait()
-                    continue
-                timedelta = when - now()
-                if timedelta > 0:
-                    heapq.heappush(self.q, (when, todo))
-                    self.cv.wait(timedelta)
-                    continue
-                self.cv.release()
-                todo()
-                self.cv.acquire()
-
-
 class Exiting(Exception):
     pass
 
@@ -187,14 +155,18 @@ class ExitHelper:
                 self.cond.wait(1)
 
 
-class CheckpointableQueue(Queue.Queue):
+class Checkpointable:
+    """
+    Implements the checkpoint() method that writes to an SQLite database
+    the current content of a Queue-like object.
+    This class it not meant to be used as is, but should be inherited.
+    """
 
     def __init__(self, dbinfo):
-        Queue.Queue.__init__(self)
         self.dbinfo = dbinfo
-        self._init2()
-
-    def _init2(self):
+        # Just test that queue exits.
+        if len(self.queue) == 0:
+            pass
         conn = sqlite3.connect(self.dbinfo.db)
         conn.isolation_level = None
         try:
@@ -238,37 +210,58 @@ class CheckpointableQueue(Queue.Queue):
         return i
 
 
-class CheckpointableTimelyQueue(CheckpointableQueue):
-
-    _PRECISION = 0.05
+class CheckpointableQueue(Queue.Queue, Checkpointable):
+    """
+    Guess what!
+    """
 
     def __init__(self, dbinfo):
-        CheckpointableQueue.__init__(self, dbinfo)
-        self.reminder = Reminder()
+        Queue.Queue.__init__(self)
+        Checkpointable.__init__(self, dbinfo)
 
-    def _init(self, maxsize):
+
+class CheckpointableTimelySQueue(Checkpointable):
+    """
+    Implements a similar but stripped down interface of Queue which
+    delivers items on time only.
+    """
+
+    def __init__(self, dbinfo):
         self.queue = []
+        self.mutex = threading.Lock()
+        self.cv = threading.Condition(self.mutex)
+        Checkpointable.__init__(self, dbinfo)
 
-    def _qsize(self, len=len):
-        return len(self.queue)
+    def put(self, when, item):
+        with Locker(self.cv):
+            heapq.heappush(self.queue, (when, item))
 
-    def _put(self, item, heappush=heapq.heappush):
-        heappush(self.queue, item)
+    def get(self, timeout=None):
+        maxtime = 0
+        if timeout is not None:
+            maxtime = now() + timeout
+        with Locker(self.cv):
+            if len(self.queue) == 0:
+                self.cv.wait(timeout)
+            if len(self.queue) == 0:
+                    return None
+            while True:
+                # Don't dequeue now, we are not sure we will use it.
+                when, item = self.queue[0]
+                curtime = now()
+                if when <= curtime:
+                    when, item = heapq.heappop(self.queue)
+                    break
+                if maxtime is None or when < maxtime:
+                    maxwait = when - curtime
+                else:
+                    maxwait = maxtime - curtime
+                self.cv.wait(maxwait)
+            return item
 
-    def _get(self, heappop=heapq.heappop):
-        return heappop(self.queue)
-
-    def get(self, block=True, timeout=None):
-        # XXX The implementation is not optimal but it is easy.
-        when, item = CheckpointableQueue.get(self, block, timeout)
-        if when - now() < self.__class__._PRECISION:
-            return (when, item)
-        # Temporarily let the item out and ask the reminder thread to
-        # push it back when needed.
-        def putback():
-            self.put((when, item))
-        self.reminder(when, putback)
-        raise Queue.Empty
+    def qsize(self):
+        with Locker(self.cv):
+            return len(self.queue)
 
 
 class DeviceTokenFormater:
@@ -1278,16 +1271,13 @@ class GCMAgent(threading.Thread):
             try:
                 while gcmmsg is None:
                     exithelper.checkexit()
-                    try:
-                        gcmmsg = self.pushq.get(True, 1)
-                    except Queue.Empty:
-                        pass
+                    gcmmsg = self.pushq.get(1)
             except Exiting:
                 self.l.debug("Exiting...")
                 break
 
             uid, creation, collapsekey, expiry, delayidle, devtoks, payload = \
-                gcmmsg[1]
+                gcmmsg
 
             # We store an absolute value but GCM wants a relative TTL.
             # Semantically this makes sense to adjust the TTL just
@@ -1348,7 +1338,7 @@ class GCMAgent(threading.Thread):
             elif status == 500 or status == 503:
                 delay = self.expbackoffdb.schedule(uid, retryafter)
                 if delay is not None:
-                    self.pushq.put((now() + delay, gcmmsg))
+                    self.pushq.put(now() + delay, gcmmsg)
                 # These errors happen from time to time, they are not
                 # strictly errors, so just issue warnings.
                 if status == 500:
@@ -1442,11 +1432,11 @@ class GCMAgent(threading.Thread):
                 continue
 
             if len(devtoks2retry) == len(devtoks):
-                self.pushq.put((now() + delay, gcmmsg))
+                self.pushq.put(now() + delay, gcmmsg)
                 continue
 
-            self.pushq.put((now() + delay, (uid, creation, collapsekey, expiry,
-                delayidle, devtoks2retry, payload)))
+            self.pushq.put(now() + delay, (uid, creation, collapsekey, expiry,
+                delayidle, devtoks2retry, payload))
 
 
 class GCMListener(Listener):
@@ -1549,8 +1539,8 @@ class GCMListener(Listener):
             devtoks = devtoks[GCMListener._MAXNUMIDS:]
             uid = self.uid
             self.uid += 1
-            self.pushq.put((createtime, (uid, createtime, collapsekey,
-                expiry, delayidle, toks, payload)))
+            self.pushq.put(createtime, (uid, createtime, collapsekey,
+                expiry, delayidle, toks, payload))
             self.l.debug("Got notification #%d for %d devices, " \
                 "expiring at %d" % (uid, len(toks), expiry))
             uids.append(str(uid))
@@ -1804,7 +1794,7 @@ if __name__ == "__main__":
         apns_feedbackq = CheckpointableQueue(apns_feedback_dbinfo)
         main_logger.info("%d APNS feedbacks retrieved from persistent " \
             "storage" % apns_feedbackq.qsize())
-        gcm_pushq = CheckpointableTimelyQueue(gcm_push_dbinfo)
+        gcm_pushq = CheckpointableTimelySQueue(gcm_push_dbinfo)
         main_logger.info("%d GCM notifications retrieved from persistent " \
             "storage" % gcm_pushq.qsize())
         db = GCMFeedbackDatabase(gcm_feedback_dbinfo)
