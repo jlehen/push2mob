@@ -65,14 +65,19 @@ class GCMRequestHandler(BaseHTTPServer.BaseHTTPRequestHandler):
         except:
             self.send_error(415, "Wrong JSON formatting")
             return
-	print "Client sent %u notifications" % len(body['registration_ids'])
+	try:
+	    status = body['data']['status']
+	except KeyError:
+	    status = 200
+	print "Client sent %u notifications, returning %u" % \
+	  (len(body['registration_ids']), status)
         resp = json.dumps({
             'multicast_id': 'stubby answer',
             'success': len(body['registration_ids']),
             'failure': 0,
             'canonical_ids': 0
         }) + "\n"
-        self.send_response(200)
+        self.send_response(status)
         self.send_header("Content-Length", str(len(resp)))
         self.end_headers()
         self.wfile.write(resp)
