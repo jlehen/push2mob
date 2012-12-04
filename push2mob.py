@@ -240,14 +240,14 @@ class CheckpointableTimelySQueue(Checkpointable, threading.Thread):
         self.mutex = threading.Lock()
         self.putcond = threading.Condition(self.mutex)
         self.getcond = threading.Condition()
+        self.putwaketime = 0
         Checkpointable.__init__(self, dbinfo)
 
     def put(self, when, item):
         with Locker(self.mutex):
             heapq.heappush(self.queue, (when, item))
-            # Wake up a sleeping thread so it can adjust the wait timeout
-            # if `when' is soon.
-            self.putcond.notify()
+            if when < self.putwaketime or self.putwaketime == 0:
+                self.putcond.notify()
 
     def get(self, timeout):
         with Locker(self.getcond):
@@ -271,15 +271,17 @@ class CheckpointableTimelySQueue(Checkpointable, threading.Thread):
                 try:
                     while True:
                         exithelper.checkexit()
+                        curtime = now()
                         try:
                             when, item = self.queue[0]
-                            maxwait = when - now()
+                            maxwait = when - curtime
                         except IndexError:
                             maxwait = 1
                         if maxwait < self._RESOLUTION:
                             break
                         if maxwait > 1:
                             maxwait = 1
+                        self.putwaketime = curtime + maxwait
                         self.putcond.wait(maxwait)
                 except Exiting:
                     main_logger.debug("Exiting...")
