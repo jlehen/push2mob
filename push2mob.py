@@ -220,48 +220,75 @@ class CheckpointableQueue(Queue.Queue, Checkpointable):
         Checkpointable.__init__(self, dbinfo)
 
 
-class CheckpointableTimelySQueue(Checkpointable):
+class CheckpointableTimelySQueue(Checkpointable, threading.Thread):
     """
     Implements a similar but stripped down interface of Queue which
     delivers items on time only.
     """
 
+    _RESOLUTION = 0.01
+
     def __init__(self, dbinfo):
+        threading.Thread.__init__(self)
+        self.daemon = True
         self.queue = []
+        self.triggered = collections.deque()
         self.mutex = threading.Lock()
-        self.cv = threading.Condition(self.mutex)
+        self.putcond = threading.Condition(self.mutex)
+        self.getcond = threading.Condition()
         Checkpointable.__init__(self, dbinfo)
 
     def put(self, when, item):
-        with Locker(self.cv):
+        with Locker(self.mutex):
             heapq.heappush(self.queue, (when, item))
+            # Wake up a sleeping thread so it can adjust the wait timeout
+            # if `when' is soon.
+            self.putcond.notify()
 
-    def get(self, timeout=None):
-        maxtime = 0
-        if timeout is not None:
-            maxtime = now() + timeout
-        with Locker(self.cv):
-            if len(self.queue) == 0:
-                self.cv.wait(timeout)
-            if len(self.queue) == 0:
-                    return None
-            while True:
-                # Don't dequeue now, we are not sure we will use it.
-                when, item = self.queue[0]
-                curtime = now()
-                if when <= curtime:
-                    when, item = heapq.heappop(self.queue)
-                    break
-                if maxtime is None or when < maxtime:
-                    maxwait = when - curtime
-                else:
-                    maxwait = maxtime - curtime
-                self.cv.wait(maxwait)
+    def get(self, timeout):
+        with Locker(self.getcond):
+            self.getcond.wait(timeout)
+            try:
+                when, item = self.triggered.popleft()
+            except IndexError:
+                return None
             return item
 
     def qsize(self):
-        with Locker(self.cv):
+        with Locker(self.mutex):
             return len(self.queue)
+
+    def run(self):
+        exithelper = ExitHelper()
+        exithelper.register()
+        with Locker(self.mutex):
+            maxwait = None
+            while True:
+                try:
+                    while True:
+                        exithelper.checkexit()
+                        try:
+                            when, item = self.queue[0]
+                            maxwait = when - now()
+                        except IndexError:
+                            maxwait = 1
+                        if maxwait < self._RESOLUTION:
+                            break
+                        if maxwait > 1:
+                            maxwait = 1
+                        self.putcond.wait(maxwait)
+                except Exiting:
+                    main_logger.debug("Exiting...")
+                    break
+                # Don't dequeue now, we are not sure we will use it.
+                when, item = self.queue[0]
+                curtime = now()
+                if when > curtime + self._RESOLUTION:
+                    continue
+                
+                self.triggered.append(heapq.heappop(self.queue))
+                with Locker(self.getcond):
+                    self.getcond.notify()
 
 
 class DeviceTokenFormater:
@@ -1312,14 +1339,14 @@ class GCMAgent(threading.Thread):
             status = httpresp.getStatus()
             jsonresp = ''.join(httpresp.getBody())
             resphdrs = httpresp.getHeaders()
-            retryafterhdr = 0
+            retryafter = 0
             try:
-                retryafterhdr = int(resphdrs['Retry-After'])
+                retryafter = int(resphdrs['Retry-After'])
             except KeyError as e:
-                retryafterhdr = 0
+                retryafter = 0
             except ValueError as e:
                 # TODO We can handle Retry-After: being a date here.
-                retryafterhdr = 0
+                retryafter = 0
 
             # First check status code.
             if status == 200:
@@ -1795,6 +1822,7 @@ if __name__ == "__main__":
         main_logger.info("%d APNS feedbacks retrieved from persistent " \
             "storage" % apns_feedbackq.qsize())
         gcm_pushq = CheckpointableTimelySQueue(gcm_push_dbinfo)
+        gcm_pushq.start()
         main_logger.info("%d GCM notifications retrieved from persistent " \
             "storage" % gcm_pushq.qsize())
         db = GCMFeedbackDatabase(gcm_feedback_dbinfo)
