@@ -234,6 +234,7 @@ class CheckpointableTimelySQueue(Checkpointable, threading.Thread):
     def __init__(self, dbinfo):
         threading.Thread.__init__(self)
         self.daemon = True
+        self.name = "CheckpointableTimelySQueue"
         self.queue = []
         self.triggered = collections.deque()
         self.mutex = threading.Lock()
