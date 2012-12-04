@@ -146,6 +146,9 @@ class ExitHelper:
                 self.cond.notifyAll()
         raise Exiting()
 
+    def pending(self):
+        return self.val
+
     def signalexit(self):
         self.exiting = True
 
@@ -1837,7 +1840,8 @@ if __name__ == "__main__":
         #
         exithelper = ExitHelper()
         def exit_handler(signum, frame):
-            main_logger.info("Exit requested, waiting threads acknowledgement...")
+            main_logger.info("Exit requested, waiting %d threads " \
+              "acknowledgement...", exithelper.pending())
             exithelper.signalexit()
         signal.signal(signal.SIGTERM, exit_handler)
         signal.signal(signal.SIGINT, exit_handler)
