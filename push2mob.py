@@ -1846,6 +1846,7 @@ if __name__ == "__main__":
             exithelper.signalexit()
         signal.signal(signal.SIGTERM, exit_handler)
         signal.signal(signal.SIGINT, exit_handler)
+        signal.signal(signal.SIGQUIT, exit_handler)
 
         #
         # Start APNS ang GCM agent threads and APNS feedback one.
