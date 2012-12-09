@@ -249,17 +249,22 @@ class CheckpointableTimelySQueue(Checkpointable, threading.Thread):
             if when < self.putwaketime or self.putwaketime == 0:
                 self.putcond.notify()
 
-    def get(self, timeout):
+    def get(self, timeout=None):
         with Locker(self.getcond):
             if len(self.triggered) > 0:
                 when, item = self.triggered.popleft()
                 return item
-            self.getcond.wait(timeout)
-            try:
-                when, item = self.triggered.popleft()
-            except IndexError:
-                return None
-            return item
+            while True:
+                if timeout is not None and timeout <= 0:
+                    return None
+                maxwait = 1 if timeout > 1 else timeout
+                timeout -= 1
+                self.getcond.wait(timeout)
+                try:
+                    when, item = self.triggered.popleft()
+                except IndexError:
+                    continue
+                return item
 
     def qsize(self):
         with Locker(self.mutex):
@@ -290,7 +295,6 @@ class CheckpointableTimelySQueue(Checkpointable, threading.Thread):
                     main_logger.debug("Exiting...")
                     break
 
-                notify = False
                 curtime = now()
                 while True:
                     # Don't dequeue now, we are not sure we will use it.
@@ -302,10 +306,9 @@ class CheckpointableTimelySQueue(Checkpointable, threading.Thread):
                         break
                     
                     self.triggered.append(heapq.heappop(self.queue))
-                    notify = True
-                if notify:
+                if len(self.triggered) > 0:
                     with Locker(self.getcond):
-                        self.getcond.notify()
+                        self.getcond.notify(len(self.triggered))
 
 
 class DeviceTokenFormater:
